@@ -1,0 +1,16 @@
+# 代码生成：proto/ → gen/go/。插件版本在 scripts/gen.sh 和 CI 里固定，三处要一致。
+version: v2
+managed:
+  enabled: true
+  override:
+    - file_option: go_package_prefix
+      value: github.com/renice-project/renice-pb/gen/go
+plugins:
+  - local: protoc-gen-go
+    out: gen/go
+    opt: paths=source_relative
+  - local: protoc-gen-go-grpc
+    out: gen/go
+    opt: paths=source_relative
+inputs:
+  - directory: proto

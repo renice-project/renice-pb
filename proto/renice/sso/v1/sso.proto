@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package renice.sso.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// SSOService 是 renice 统一登录（renice-sso）对内提供的接口，只给各服务的后端在内网调用。
+// 浏览器永远不直接调它：浏览器只和 SSO 的登录页、本服务的 REST 接口打交道。
+service SSOService {
+  // ExchangeCode 用登录回调里拿到的一次性 code 换出用户身份。
+  //
+  // - code 只能用一次，60 秒内有效；用过、过期、redirect_uri 对不上都返回 INVALID_ARGUMENT，错误信息里写原因。
+  // - client_id 或 client_secret 不对返回 UNAUTHENTICATED。
+  // - 换到身份之后，由调用方自己签发 AT/RT，SSO 不参与调用方后续的会话。
+  //
+  // 业务例子：用户在 renice-oj 点「用 renice 账号登录」，在 SSO 登录成功后被带回
+  // https://oj.renice.cc/api/v1/auth/callback?code=...，renice-oj 后端拿这个 code 来换出 ice 的身份。
+  rpc ExchangeCode(ExchangeCodeRequest) returns (ExchangeCodeResponse);
+}
+
+// ExchangeCodeRequest 是 ExchangeCode 的入参。
+message ExchangeCodeRequest {
+  // 登录回调 URL 上带回来的一次性 code。例："c_7Hq2xP9vLmN4kR8sT1wY"
+  string code = 1;
+  // 调用方在 SSO 登记的客户端 ID，一般就是服务名。例："renice-oj"
+  string client_id = 2;
+  // 客户端密钥，只放在服务器的 .env 里，绝不出现在前端和仓库里。例："（见服务器 .env 的 APP_SSO_CLIENT_SECRET）"
+  string client_secret = 3;
+  // 发起登录时用的回调地址，必须和那一次一字不差，防止 code 被拿到别的地址上用。例："https://oj.renice.cc/api/v1/auth/callback"
+  string redirect_uri = 4;
+}
+
+// ExchangeCodeResponse 是 ExchangeCode 的出参。
+message ExchangeCodeResponse {
+  // 这次登录的用户。
+  User user = 1;
+}
+
+// User 是 SSO 里的一个用户。各服务一律用 id 关联本地数据，不要用 username 或 email。
+message User {
+  // 用户在 SSO 里的唯一 ID，永不复用。例：10086
+  int64 id = 1;
+  // 登录名，全局唯一，只含小写字母、数字和短横线。例："ice"
+  string username = 2;
+  // 显示名，用户随时可以改，只用来展示。例："冰"
+  string display_name = 3;
+  // 已验证的邮箱。例："ice@example.com"
+  string email = 4;
+  // 头像地址；没有头像时是空字符串。例："https://sso.renice.cc/avatars/10086.png"
+  string avatar_url = 5;
+  // 在 SSO 注册的时间。例：2026-10-16T15:14:18+08:00
+  google.protobuf.Timestamp created_at = 6;
+}

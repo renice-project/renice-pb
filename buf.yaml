@@ -1,0 +1,11 @@
+# buf 配置：lint 规则 + 破坏性改动检查。改这里先读 AGENTS.md。
+version: v2
+modules:
+  - path: proto
+lint:
+  use:
+    - STANDARD   # 包名带版本、目录和包名一致、Request/Response 命名等
+    - COMMENTS   # service、rpc、message、field、enum 必须有注释
+breaking:
+  use:
+    - FILE       # 同一个文件里删字段、改类型、改编号都算破坏性改动
