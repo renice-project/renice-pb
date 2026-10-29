@@ -150,9 +150,9 @@ type User struct {
 	Username string `protobuf:"bytes,2,opt,name=username,proto3" json:"username,omitempty"`
 	// 显示名，用户随时可以改，只用来展示。例："冰"
 	DisplayName string `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
-	// 已验证的邮箱。例："ice@example.com"
+	// 已验证的邮箱。例："ice@renice.cc"
 	Email string `protobuf:"bytes,4,opt,name=email,proto3" json:"email,omitempty"`
-	// 头像地址；没有头像时是空字符串。例："https://sso.renice.cc/avatars/10086.png"
+	// 头像地址；没有头像时是空字符串。例："https://renice.cc/avatars/10086.png"
 	AvatarUrl string `protobuf:"bytes,5,opt,name=avatar_url,json=avatarUrl,proto3" json:"avatar_url,omitempty"`
 	// 在 SSO 注册的时间。例：2026-10-16T15:14:18+08:00
 	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
