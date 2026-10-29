@@ -34,7 +34,7 @@ type SSOServiceClient interface {
 	// 处理顺序与错误码：
 	//
 	// 1. client_id 不存在、客户端已停用，或者 client_secret 不对 → UNAUTHENTICATED。
-	//    secret 在 code 之前校验：secret 错时 code 不会被消耗，拿到 code 的人没有 secret 也用不掉它。
+	//    secret 使用常量时间比较，并在 code 之前校验：secret 错时 code 不会被消耗，拿到 code 的人没有 secret 也用不掉它。
 	// 2. code 只能用一次，60 秒内有效；用过、过期，或者 client_id / redirect_uri 和发 code 时对不上 → INVALID_ARGUMENT，错误信息里写原因。
 	//    走到这一步 code 就已经被消耗，哪怕后面失败也不能再用。
 	// 3. 用户已在 SSO 被停用 → PERMISSION_DENIED「账号已停用」，调用方应提示用户而不是重试。
@@ -76,7 +76,7 @@ type SSOServiceServer interface {
 	// 处理顺序与错误码：
 	//
 	// 1. client_id 不存在、客户端已停用，或者 client_secret 不对 → UNAUTHENTICATED。
-	//    secret 在 code 之前校验：secret 错时 code 不会被消耗，拿到 code 的人没有 secret 也用不掉它。
+	//    secret 使用常量时间比较，并在 code 之前校验：secret 错时 code 不会被消耗，拿到 code 的人没有 secret 也用不掉它。
 	// 2. code 只能用一次，60 秒内有效；用过、过期，或者 client_id / redirect_uri 和发 code 时对不上 → INVALID_ARGUMENT，错误信息里写原因。
 	//    走到这一步 code 就已经被消耗，哪怕后面失败也不能再用。
 	// 3. 用户已在 SSO 被停用 → PERMISSION_DENIED「账号已停用」，调用方应提示用户而不是重试。
