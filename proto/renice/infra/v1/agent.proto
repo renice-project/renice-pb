@@ -133,7 +133,6 @@ message Report {
   int64 seq = 1;
   // 采样结束的时间，指标里的速率都是「上一次采样到这一刻」的平均值。例：2026-10-30T23:05:03+08:00
   google.protobuf.Timestamp sampled_at = 2;
-  // 采样时的开机 ID。机器重启但 agent 缓存没丢的情况不存在（缓存只在内存里），
   // 采样时的开机 ID。服务端用它判断 rx/tx_bytes_total 这组累计计数器属于哪一次开机，开机 ID 变了就从 0 重新累加。
   // 例："6f1c2d3e-4b5a-4c7d-9e8f-0a1b2c3d4e5f"
   string boot_id = 3;

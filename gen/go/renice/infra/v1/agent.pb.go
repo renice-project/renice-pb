@@ -800,7 +800,6 @@ type Report struct {
 	Seq int64 `protobuf:"varint,1,opt,name=seq,proto3" json:"seq,omitempty"`
 	// 采样结束的时间，指标里的速率都是「上一次采样到这一刻」的平均值。例：2026-10-30T23:05:03+08:00
 	SampledAt *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=sampled_at,json=sampledAt,proto3" json:"sampled_at,omitempty"`
-	// 采样时的开机 ID。机器重启但 agent 缓存没丢的情况不存在（缓存只在内存里），
 	// 采样时的开机 ID。服务端用它判断 rx/tx_bytes_total 这组累计计数器属于哪一次开机，开机 ID 变了就从 0 重新累加。
 	// 例："6f1c2d3e-4b5a-4c7d-9e8f-0a1b2c3d4e5f"
 	BootId string `protobuf:"bytes,3,opt,name=boot_id,json=bootId,proto3" json:"boot_id,omitempty"`
