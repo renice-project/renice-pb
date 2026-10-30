@@ -20,6 +20,9 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	SSOService_ExchangeCode_FullMethodName = "/renice.sso.v1.SSOService/ExchangeCode"
+	SSOService_GrantApp_FullMethodName     = "/renice.sso.v1.SSOService/GrantApp"
+	SSOService_RevokeApp_FullMethodName    = "/renice.sso.v1.SSOService/RevokeApp"
+	SSOService_ListGrants_FullMethodName   = "/renice.sso.v1.SSOService/ListGrants"
 )
 
 // SSOServiceClient is the client API for SSOService service.
@@ -39,11 +42,53 @@ type SSOServiceClient interface {
 	//    走到这一步 code 就已经被消耗，哪怕后面失败也不能再用。
 	// 3. 用户已在 SSO 被停用 → PERMISSION_DENIED「账号已停用」，调用方应提示用户而不是重试。
 	//
-	// 换到身份之后，由调用方自己签发 AT/RT，SSO 不参与调用方后续的会话；SSO 自己的角色（admin / user）不随身份返回，各服务的权限各自管理。
+	// 换到身份之后，由调用方自己签发 AT/RT，SSO 不参与调用方后续的会话；SSO 自己的角色（sys / ops / admin / user）不随身份返回，各服务的权限各自管理。
 	//
 	// 业务例子：用户在 renice-oj 点「用 renice 账号登录」，在 SSO 登录成功后被带回
 	// https://oj.renice.cc/api/v1/auth/callback?code=...，renice-oj 后端拿这个 code 来换出 ice 的身份。
 	ExchangeCode(ctx context.Context, in *ExchangeCodeRequest, opts ...grpc.CallOption) (*ExchangeCodeResponse, error)
+	// GrantApp 告诉 SSO「这个用户可以使用我」，SSO 启动台会给他显示调用方的入口。
+	//
+	// 授权只决定启动台显示不显示，不拦登录：用户能不能真正使用，始终由调用方自己的权限表决定。
+	// 所以调用方应该在自己的权限变化时（例如某人成为 admin）调用它，并定期用 ListGrants 对账，补上写失败的那几次。
+	//
+	// 调用方用自己的 client_id + client_secret 证明身份，只能给自己授权，改不了别的服务：
+	//
+	// 1. client_id 不存在、客户端已停用，或者 client_secret 不对 → UNAUTHENTICATED（和 ExchangeCode 同一套校验）。
+	// 2. user_id 不是正数 → INVALID_ARGUMENT。
+	// 3. 用户不存在 → NOT_FOUND。用户已停用也可以授权（停用的人登录不了，看不到启动台）。
+	// 4. 已经授权过 → 成功，created=false，granted_at 是第一次授权的时间。重复调用是安全的。
+	//
+	// 启动台规则：服务登记为「显示在启动台」时所有人都能看到；登记为不显示时，只有被授权的用户能看到。
+	//
+	// 业务例子：ice 在 renice-infra 里被设为 admin，renice-infra 后端调 GrantApp(user_id=10004)，
+	// 之后 ice 打开 https://renice.cc 的启动台就能看到 renice-infra 的入口。
+	GrantApp(ctx context.Context, in *GrantAppRequest, opts ...grpc.CallOption) (*GrantAppResponse, error)
+	// RevokeApp 撤销 GrantApp 的授权，用户的启动台不再显示调用方的入口。
+	//
+	// 鉴权与 GrantApp 相同，只能撤销自己的授权：
+	//
+	// 1. client_id 不存在、客户端已停用，或者 client_secret 不对 → UNAUTHENTICATED。
+	// 2. user_id 不是正数 → INVALID_ARGUMENT。
+	// 3. 本来就没有授权（包括用户不存在）→ 成功，revoked=false。重复调用是安全的。
+	//
+	// 业务例子：ice 在 renice-infra 里被取消 admin，renice-infra 后端调 RevokeApp(user_id=10004)。
+	RevokeApp(ctx context.Context, in *RevokeAppRequest, opts ...grpc.CallOption) (*RevokeAppResponse, error)
+	// ListGrants 按 user_id 从小到大分页列出调用方自己的全部授权，给调用方对账用：
+	// 拿它和自己的权限表比一遍，少了的补 GrantApp，多了的补 RevokeApp。
+	//
+	// 分页不是快照：page_token 是上一页最后一个 user_id，下一页只取比它大的。翻页期间新增、撤销的授权，
+	// 可能出现也可能不出现在这次结果里。这对对账是安全的，因为调用方的授权只有调用方自己能改，
+	// 翻页期间的变化都是调用方自己刚做的；对账按自己的权限表补 GrantApp / RevokeApp，两者都幂等，
+	// 多补一次不会出错。漏掉的变化会在下一轮对账里对上。
+	//
+	// 鉴权与 GrantApp 相同，只能看到自己的授权：
+	//
+	// 1. client_id 不存在、客户端已停用，或者 client_secret 不对 → UNAUTHENTICATED。
+	// 2. page_size 小于 0 或大于 1000、page_token 不是上一页返回的值 → INVALID_ARGUMENT。
+	//
+	// 业务例子：renice-infra 每 10 分钟调一次，翻完所有页，和自己的 admin 列表对一遍。
+	ListGrants(ctx context.Context, in *ListGrantsRequest, opts ...grpc.CallOption) (*ListGrantsResponse, error)
 }
 
 type sSOServiceClient struct {
@@ -58,6 +103,36 @@ func (c *sSOServiceClient) ExchangeCode(ctx context.Context, in *ExchangeCodeReq
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ExchangeCodeResponse)
 	err := c.cc.Invoke(ctx, SSOService_ExchangeCode_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sSOServiceClient) GrantApp(ctx context.Context, in *GrantAppRequest, opts ...grpc.CallOption) (*GrantAppResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GrantAppResponse)
+	err := c.cc.Invoke(ctx, SSOService_GrantApp_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sSOServiceClient) RevokeApp(ctx context.Context, in *RevokeAppRequest, opts ...grpc.CallOption) (*RevokeAppResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RevokeAppResponse)
+	err := c.cc.Invoke(ctx, SSOService_RevokeApp_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sSOServiceClient) ListGrants(ctx context.Context, in *ListGrantsRequest, opts ...grpc.CallOption) (*ListGrantsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListGrantsResponse)
+	err := c.cc.Invoke(ctx, SSOService_ListGrants_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -81,11 +156,53 @@ type SSOServiceServer interface {
 	//    走到这一步 code 就已经被消耗，哪怕后面失败也不能再用。
 	// 3. 用户已在 SSO 被停用 → PERMISSION_DENIED「账号已停用」，调用方应提示用户而不是重试。
 	//
-	// 换到身份之后，由调用方自己签发 AT/RT，SSO 不参与调用方后续的会话；SSO 自己的角色（admin / user）不随身份返回，各服务的权限各自管理。
+	// 换到身份之后，由调用方自己签发 AT/RT，SSO 不参与调用方后续的会话；SSO 自己的角色（sys / ops / admin / user）不随身份返回，各服务的权限各自管理。
 	//
 	// 业务例子：用户在 renice-oj 点「用 renice 账号登录」，在 SSO 登录成功后被带回
 	// https://oj.renice.cc/api/v1/auth/callback?code=...，renice-oj 后端拿这个 code 来换出 ice 的身份。
 	ExchangeCode(context.Context, *ExchangeCodeRequest) (*ExchangeCodeResponse, error)
+	// GrantApp 告诉 SSO「这个用户可以使用我」，SSO 启动台会给他显示调用方的入口。
+	//
+	// 授权只决定启动台显示不显示，不拦登录：用户能不能真正使用，始终由调用方自己的权限表决定。
+	// 所以调用方应该在自己的权限变化时（例如某人成为 admin）调用它，并定期用 ListGrants 对账，补上写失败的那几次。
+	//
+	// 调用方用自己的 client_id + client_secret 证明身份，只能给自己授权，改不了别的服务：
+	//
+	// 1. client_id 不存在、客户端已停用，或者 client_secret 不对 → UNAUTHENTICATED（和 ExchangeCode 同一套校验）。
+	// 2. user_id 不是正数 → INVALID_ARGUMENT。
+	// 3. 用户不存在 → NOT_FOUND。用户已停用也可以授权（停用的人登录不了，看不到启动台）。
+	// 4. 已经授权过 → 成功，created=false，granted_at 是第一次授权的时间。重复调用是安全的。
+	//
+	// 启动台规则：服务登记为「显示在启动台」时所有人都能看到；登记为不显示时，只有被授权的用户能看到。
+	//
+	// 业务例子：ice 在 renice-infra 里被设为 admin，renice-infra 后端调 GrantApp(user_id=10004)，
+	// 之后 ice 打开 https://renice.cc 的启动台就能看到 renice-infra 的入口。
+	GrantApp(context.Context, *GrantAppRequest) (*GrantAppResponse, error)
+	// RevokeApp 撤销 GrantApp 的授权，用户的启动台不再显示调用方的入口。
+	//
+	// 鉴权与 GrantApp 相同，只能撤销自己的授权：
+	//
+	// 1. client_id 不存在、客户端已停用，或者 client_secret 不对 → UNAUTHENTICATED。
+	// 2. user_id 不是正数 → INVALID_ARGUMENT。
+	// 3. 本来就没有授权（包括用户不存在）→ 成功，revoked=false。重复调用是安全的。
+	//
+	// 业务例子：ice 在 renice-infra 里被取消 admin，renice-infra 后端调 RevokeApp(user_id=10004)。
+	RevokeApp(context.Context, *RevokeAppRequest) (*RevokeAppResponse, error)
+	// ListGrants 按 user_id 从小到大分页列出调用方自己的全部授权，给调用方对账用：
+	// 拿它和自己的权限表比一遍，少了的补 GrantApp，多了的补 RevokeApp。
+	//
+	// 分页不是快照：page_token 是上一页最后一个 user_id，下一页只取比它大的。翻页期间新增、撤销的授权，
+	// 可能出现也可能不出现在这次结果里。这对对账是安全的，因为调用方的授权只有调用方自己能改，
+	// 翻页期间的变化都是调用方自己刚做的；对账按自己的权限表补 GrantApp / RevokeApp，两者都幂等，
+	// 多补一次不会出错。漏掉的变化会在下一轮对账里对上。
+	//
+	// 鉴权与 GrantApp 相同，只能看到自己的授权：
+	//
+	// 1. client_id 不存在、客户端已停用，或者 client_secret 不对 → UNAUTHENTICATED。
+	// 2. page_size 小于 0 或大于 1000、page_token 不是上一页返回的值 → INVALID_ARGUMENT。
+	//
+	// 业务例子：renice-infra 每 10 分钟调一次，翻完所有页，和自己的 admin 列表对一遍。
+	ListGrants(context.Context, *ListGrantsRequest) (*ListGrantsResponse, error)
 	mustEmbedUnimplementedSSOServiceServer()
 }
 
@@ -98,6 +215,15 @@ type UnimplementedSSOServiceServer struct{}
 
 func (UnimplementedSSOServiceServer) ExchangeCode(context.Context, *ExchangeCodeRequest) (*ExchangeCodeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ExchangeCode not implemented")
+}
+func (UnimplementedSSOServiceServer) GrantApp(context.Context, *GrantAppRequest) (*GrantAppResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GrantApp not implemented")
+}
+func (UnimplementedSSOServiceServer) RevokeApp(context.Context, *RevokeAppRequest) (*RevokeAppResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RevokeApp not implemented")
+}
+func (UnimplementedSSOServiceServer) ListGrants(context.Context, *ListGrantsRequest) (*ListGrantsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListGrants not implemented")
 }
 func (UnimplementedSSOServiceServer) mustEmbedUnimplementedSSOServiceServer() {}
 func (UnimplementedSSOServiceServer) testEmbeddedByValue()                    {}
@@ -138,6 +264,60 @@ func _SSOService_ExchangeCode_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SSOService_GrantApp_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GrantAppRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SSOServiceServer).GrantApp(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SSOService_GrantApp_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SSOServiceServer).GrantApp(ctx, req.(*GrantAppRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SSOService_RevokeApp_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RevokeAppRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SSOServiceServer).RevokeApp(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SSOService_RevokeApp_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SSOServiceServer).RevokeApp(ctx, req.(*RevokeAppRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SSOService_ListGrants_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListGrantsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SSOServiceServer).ListGrants(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SSOService_ListGrants_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SSOServiceServer).ListGrants(ctx, req.(*ListGrantsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // SSOService_ServiceDesc is the grpc.ServiceDesc for SSOService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -148,6 +328,18 @@ var SSOService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ExchangeCode",
 			Handler:    _SSOService_ExchangeCode_Handler,
+		},
+		{
+			MethodName: "GrantApp",
+			Handler:    _SSOService_GrantApp_Handler,
+		},
+		{
+			MethodName: "RevokeApp",
+			Handler:    _SSOService_RevokeApp_Handler,
+		},
+		{
+			MethodName: "ListGrants",
+			Handler:    _SSOService_ListGrants_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -4,6 +4,14 @@
 
 ## 未发布
 
+### 新增
+
+- `renice.sso.v1.SSOService.GrantApp` / `RevokeApp` / `ListGrants`：自己管权限的服务（例如 renice-infra）把「谁可以使用我」推给 SSO，SSO 启动台据此给这些用户显示入口；`ListGrants` 按服务列出授权，给调用方对账，补上写失败的那几次。背景：各服务的权限由服务自己决定，SSO 只负责显示入口、不拦登录（2026-10-30 ice 定）。
+
+### 变更
+
+- 注释：`User.username` 改为字母开头、大小写字母 / 数字 / - / _、唯一性不区分大小写（renice-sso v0.1.0-alpha.1 起）；SSO 角色写成 sys / ops / admin / user（v0.1.0-alpha.2 起）。只改注释，不影响兼容。
+
 ## 0.1.0 — 2026-10-29
 
 第一个发布版本，renice-sso v0.1.0 和接入它的服务都钉这个 tag。
