@@ -17,11 +17,51 @@ service SSOService {
   //    走到这一步 code 就已经被消耗，哪怕后面失败也不能再用。
   // 3. 用户已在 SSO 被停用 → PERMISSION_DENIED「账号已停用」，调用方应提示用户而不是重试。
   //
-  // 换到身份之后，由调用方自己签发 AT/RT，SSO 不参与调用方后续的会话；SSO 自己的角色（admin / user）不随身份返回，各服务的权限各自管理。
+  // 换到身份之后，由调用方自己签发 AT/RT，SSO 不参与调用方后续的会话；SSO 自己的角色（sys / ops / admin / user）不随身份返回，各服务的权限各自管理。
   //
   // 业务例子：用户在 renice-oj 点「用 renice 账号登录」，在 SSO 登录成功后被带回
   // https://oj.renice.cc/api/v1/auth/callback?code=...，renice-oj 后端拿这个 code 来换出 ice 的身份。
   rpc ExchangeCode(ExchangeCodeRequest) returns (ExchangeCodeResponse);
+
+  // GrantApp 告诉 SSO「这个用户可以使用我」，SSO 启动台会给他显示调用方的入口。
+  //
+  // 授权只决定启动台显示不显示，不拦登录：用户能不能真正使用，始终由调用方自己的权限表决定。
+  // 所以调用方应该在自己的权限变化时（例如某人成为 admin）调用它，并定期用 ListGrants 对账，补上写失败的那几次。
+  //
+  // 调用方用自己的 client_id + client_secret 证明身份，只能给自己授权，改不了别的服务：
+  //
+  // 1. client_id 不存在、客户端已停用，或者 client_secret 不对 → UNAUTHENTICATED（和 ExchangeCode 同一套校验）。
+  // 2. user_id 不是正数 → INVALID_ARGUMENT。
+  // 3. 用户不存在 → NOT_FOUND。用户已停用也可以授权（停用的人登录不了，看不到启动台）。
+  // 4. 已经授权过 → 成功，created=false，granted_at 是第一次授权的时间。重复调用是安全的。
+  //
+  // 启动台规则：服务登记为「显示在启动台」时所有人都能看到；登记为不显示时，只有被授权的用户能看到。
+  //
+  // 业务例子：ice 在 renice-infra 里被设为 admin，renice-infra 后端调 GrantApp(user_id=10004)，
+  // 之后 ice 打开 https://renice.cc 的启动台就能看到 renice-infra 的入口。
+  rpc GrantApp(GrantAppRequest) returns (GrantAppResponse);
+
+  // RevokeApp 撤销 GrantApp 的授权，用户的启动台不再显示调用方的入口。
+  //
+  // 鉴权与 GrantApp 相同，只能撤销自己的授权：
+  //
+  // 1. client_id 不存在、客户端已停用，或者 client_secret 不对 → UNAUTHENTICATED。
+  // 2. user_id 不是正数 → INVALID_ARGUMENT。
+  // 3. 本来就没有授权（包括用户不存在）→ 成功，revoked=false。重复调用是安全的。
+  //
+  // 业务例子：ice 在 renice-infra 里被取消 admin，renice-infra 后端调 RevokeApp(user_id=10004)。
+  rpc RevokeApp(RevokeAppRequest) returns (RevokeAppResponse);
+
+  // ListGrants 按 user_id 从小到大分页列出调用方自己的全部授权，给调用方对账用：
+  // 拿它和自己的权限表比一遍，少了的补 GrantApp，多了的补 RevokeApp。
+  //
+  // 鉴权与 GrantApp 相同，只能看到自己的授权：
+  //
+  // 1. client_id 不存在、客户端已停用，或者 client_secret 不对 → UNAUTHENTICATED。
+  // 2. page_size 小于 0 或大于 1000、page_token 不是上一页返回的值 → INVALID_ARGUMENT。
+  //
+  // 业务例子：renice-infra 每 10 分钟调一次，翻完所有页，和自己的 admin 列表对一遍。
+  rpc ListGrants(ListGrantsRequest) returns (ListGrantsResponse);
 }
 
 // ExchangeCodeRequest 是 ExchangeCode 的入参。
@@ -46,7 +86,7 @@ message ExchangeCodeResponse {
 message User {
   // 用户在 SSO 里的唯一 ID，永不复用。例：10086
   int64 id = 1;
-  // 登录名，全局唯一，只含小写字母、数字和短横线。例："ice"
+  // 登录名，全局唯一（不区分大小写），字母开头，含大小写字母、数字、- 和 _，按注册时原样返回。例："ice"
   string username = 2;
   // 显示名，用户随时可以改，只用来展示。例："冰"
   string display_name = 3;
@@ -56,4 +96,66 @@ message User {
   string avatar_url = 5;
   // 在 SSO 注册的时间。例：2026-10-16T15:14:18+08:00
   google.protobuf.Timestamp created_at = 6;
+}
+
+// GrantAppRequest 是 GrantApp 的入参。
+message GrantAppRequest {
+  // 调用方在 SSO 登记的客户端 ID，授权就记在这个服务名下。例："renice-infra"
+  string client_id = 1;
+  // 客户端密钥，只放在服务器的 .env 里。例："（见服务器 .env 的 APP_SSO_CLIENT_SECRET）"
+  string client_secret = 2;
+  // 被授权用户在 SSO 里的 ID，即 ExchangeCode 返回的 User.id。例：10004
+  int64 user_id = 3;
+}
+
+// GrantAppResponse 是 GrantApp 的出参。
+message GrantAppResponse {
+  // 这次是否新建了授权；之前已经授权过时为 false。例：true
+  bool created = 1;
+  // 授权时间；之前已经授权过时是第一次授权的时间。例：2026-10-30T20:10:00+08:00
+  google.protobuf.Timestamp granted_at = 2;
+}
+
+// RevokeAppRequest 是 RevokeApp 的入参。
+message RevokeAppRequest {
+  // 调用方在 SSO 登记的客户端 ID。例："renice-infra"
+  string client_id = 1;
+  // 客户端密钥，只放在服务器的 .env 里。例："（见服务器 .env 的 APP_SSO_CLIENT_SECRET）"
+  string client_secret = 2;
+  // 要撤销授权的用户 ID。例：10004
+  int64 user_id = 3;
+}
+
+// RevokeAppResponse 是 RevokeApp 的出参。
+message RevokeAppResponse {
+  // 这次是否真的删掉了一条授权；本来就没有时为 false。例：true
+  bool revoked = 1;
+}
+
+// ListGrantsRequest 是 ListGrants 的入参。
+message ListGrantsRequest {
+  // 调用方在 SSO 登记的客户端 ID，只列这个服务名下的授权。例："renice-infra"
+  string client_id = 1;
+  // 客户端密钥，只放在服务器的 .env 里。例："（见服务器 .env 的 APP_SSO_CLIENT_SECRET）"
+  string client_secret = 2;
+  // 每页最多几条，0 表示用默认值 100，最大 1000。例：100
+  int32 page_size = 3;
+  // 上一页返回的 next_page_token；第一页传空字符串。例：""
+  string page_token = 4;
+}
+
+// ListGrantsResponse 是 ListGrants 的出参。
+message ListGrantsResponse {
+  // 这一页的授权，按 user_id 从小到大。
+  repeated Grant grants = 1;
+  // 下一页的 token；为空字符串表示已经是最后一页。例："10004"
+  string next_page_token = 2;
+}
+
+// Grant 是一条授权：某个用户可以在启动台看到某个服务。
+message Grant {
+  // 被授权用户在 SSO 里的 ID。例：10004
+  int64 user_id = 1;
+  // 授权时间。例：2026-10-30T20:10:00+08:00
+  google.protobuf.Timestamp granted_at = 2;
 }

@@ -146,7 +146,7 @@ type User struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// 用户在 SSO 里的唯一 ID，永不复用。例：10086
 	Id int64 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
-	// 登录名，全局唯一，只含小写字母、数字和短横线。例："ice"
+	// 登录名，全局唯一（不区分大小写），字母开头，含大小写字母、数字、- 和 _，按注册时原样返回。例："ice"
 	Username string `protobuf:"bytes,2,opt,name=username,proto3" json:"username,omitempty"`
 	// 显示名，用户随时可以改，只用来展示。例："冰"
 	DisplayName string `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
@@ -232,6 +232,418 @@ func (x *User) GetCreatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+// GrantAppRequest 是 GrantApp 的入参。
+type GrantAppRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 调用方在 SSO 登记的客户端 ID，授权就记在这个服务名下。例："renice-infra"
+	ClientId string `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	// 客户端密钥，只放在服务器的 .env 里。例："（见服务器 .env 的 APP_SSO_CLIENT_SECRET）"
+	ClientSecret string `protobuf:"bytes,2,opt,name=client_secret,json=clientSecret,proto3" json:"client_secret,omitempty"`
+	// 被授权用户在 SSO 里的 ID，即 ExchangeCode 返回的 User.id。例：10004
+	UserId        int64 `protobuf:"varint,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GrantAppRequest) Reset() {
+	*x = GrantAppRequest{}
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GrantAppRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GrantAppRequest) ProtoMessage() {}
+
+func (x *GrantAppRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GrantAppRequest.ProtoReflect.Descriptor instead.
+func (*GrantAppRequest) Descriptor() ([]byte, []int) {
+	return file_renice_sso_v1_sso_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *GrantAppRequest) GetClientId() string {
+	if x != nil {
+		return x.ClientId
+	}
+	return ""
+}
+
+func (x *GrantAppRequest) GetClientSecret() string {
+	if x != nil {
+		return x.ClientSecret
+	}
+	return ""
+}
+
+func (x *GrantAppRequest) GetUserId() int64 {
+	if x != nil {
+		return x.UserId
+	}
+	return 0
+}
+
+// GrantAppResponse 是 GrantApp 的出参。
+type GrantAppResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 这次是否新建了授权；之前已经授权过时为 false。例：true
+	Created bool `protobuf:"varint,1,opt,name=created,proto3" json:"created,omitempty"`
+	// 授权时间；之前已经授权过时是第一次授权的时间。例：2026-10-30T20:10:00+08:00
+	GrantedAt     *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=granted_at,json=grantedAt,proto3" json:"granted_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GrantAppResponse) Reset() {
+	*x = GrantAppResponse{}
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GrantAppResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GrantAppResponse) ProtoMessage() {}
+
+func (x *GrantAppResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GrantAppResponse.ProtoReflect.Descriptor instead.
+func (*GrantAppResponse) Descriptor() ([]byte, []int) {
+	return file_renice_sso_v1_sso_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *GrantAppResponse) GetCreated() bool {
+	if x != nil {
+		return x.Created
+	}
+	return false
+}
+
+func (x *GrantAppResponse) GetGrantedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.GrantedAt
+	}
+	return nil
+}
+
+// RevokeAppRequest 是 RevokeApp 的入参。
+type RevokeAppRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 调用方在 SSO 登记的客户端 ID。例："renice-infra"
+	ClientId string `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	// 客户端密钥，只放在服务器的 .env 里。例："（见服务器 .env 的 APP_SSO_CLIENT_SECRET）"
+	ClientSecret string `protobuf:"bytes,2,opt,name=client_secret,json=clientSecret,proto3" json:"client_secret,omitempty"`
+	// 要撤销授权的用户 ID。例：10004
+	UserId        int64 `protobuf:"varint,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RevokeAppRequest) Reset() {
+	*x = RevokeAppRequest{}
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RevokeAppRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RevokeAppRequest) ProtoMessage() {}
+
+func (x *RevokeAppRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RevokeAppRequest.ProtoReflect.Descriptor instead.
+func (*RevokeAppRequest) Descriptor() ([]byte, []int) {
+	return file_renice_sso_v1_sso_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *RevokeAppRequest) GetClientId() string {
+	if x != nil {
+		return x.ClientId
+	}
+	return ""
+}
+
+func (x *RevokeAppRequest) GetClientSecret() string {
+	if x != nil {
+		return x.ClientSecret
+	}
+	return ""
+}
+
+func (x *RevokeAppRequest) GetUserId() int64 {
+	if x != nil {
+		return x.UserId
+	}
+	return 0
+}
+
+// RevokeAppResponse 是 RevokeApp 的出参。
+type RevokeAppResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 这次是否真的删掉了一条授权；本来就没有时为 false。例：true
+	Revoked       bool `protobuf:"varint,1,opt,name=revoked,proto3" json:"revoked,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RevokeAppResponse) Reset() {
+	*x = RevokeAppResponse{}
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RevokeAppResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RevokeAppResponse) ProtoMessage() {}
+
+func (x *RevokeAppResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RevokeAppResponse.ProtoReflect.Descriptor instead.
+func (*RevokeAppResponse) Descriptor() ([]byte, []int) {
+	return file_renice_sso_v1_sso_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *RevokeAppResponse) GetRevoked() bool {
+	if x != nil {
+		return x.Revoked
+	}
+	return false
+}
+
+// ListGrantsRequest 是 ListGrants 的入参。
+type ListGrantsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 调用方在 SSO 登记的客户端 ID，只列这个服务名下的授权。例："renice-infra"
+	ClientId string `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	// 客户端密钥，只放在服务器的 .env 里。例："（见服务器 .env 的 APP_SSO_CLIENT_SECRET）"
+	ClientSecret string `protobuf:"bytes,2,opt,name=client_secret,json=clientSecret,proto3" json:"client_secret,omitempty"`
+	// 每页最多几条，0 表示用默认值 100，最大 1000。例：100
+	PageSize int32 `protobuf:"varint,3,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	// 上一页返回的 next_page_token；第一页传空字符串。例：""
+	PageToken     string `protobuf:"bytes,4,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListGrantsRequest) Reset() {
+	*x = ListGrantsRequest{}
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListGrantsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListGrantsRequest) ProtoMessage() {}
+
+func (x *ListGrantsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListGrantsRequest.ProtoReflect.Descriptor instead.
+func (*ListGrantsRequest) Descriptor() ([]byte, []int) {
+	return file_renice_sso_v1_sso_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ListGrantsRequest) GetClientId() string {
+	if x != nil {
+		return x.ClientId
+	}
+	return ""
+}
+
+func (x *ListGrantsRequest) GetClientSecret() string {
+	if x != nil {
+		return x.ClientSecret
+	}
+	return ""
+}
+
+func (x *ListGrantsRequest) GetPageSize() int32 {
+	if x != nil {
+		return x.PageSize
+	}
+	return 0
+}
+
+func (x *ListGrantsRequest) GetPageToken() string {
+	if x != nil {
+		return x.PageToken
+	}
+	return ""
+}
+
+// ListGrantsResponse 是 ListGrants 的出参。
+type ListGrantsResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 这一页的授权，按 user_id 从小到大。
+	Grants []*Grant `protobuf:"bytes,1,rep,name=grants,proto3" json:"grants,omitempty"`
+	// 下一页的 token；为空字符串表示已经是最后一页。例："10004"
+	NextPageToken string `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListGrantsResponse) Reset() {
+	*x = ListGrantsResponse{}
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListGrantsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListGrantsResponse) ProtoMessage() {}
+
+func (x *ListGrantsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListGrantsResponse.ProtoReflect.Descriptor instead.
+func (*ListGrantsResponse) Descriptor() ([]byte, []int) {
+	return file_renice_sso_v1_sso_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ListGrantsResponse) GetGrants() []*Grant {
+	if x != nil {
+		return x.Grants
+	}
+	return nil
+}
+
+func (x *ListGrantsResponse) GetNextPageToken() string {
+	if x != nil {
+		return x.NextPageToken
+	}
+	return ""
+}
+
+// Grant 是一条授权：某个用户可以在启动台看到某个服务。
+type Grant struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 被授权用户在 SSO 里的 ID。例：10004
+	UserId int64 `protobuf:"varint,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	// 授权时间。例：2026-10-30T20:10:00+08:00
+	GrantedAt     *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=granted_at,json=grantedAt,proto3" json:"granted_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Grant) Reset() {
+	*x = Grant{}
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Grant) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Grant) ProtoMessage() {}
+
+func (x *Grant) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Grant.ProtoReflect.Descriptor instead.
+func (*Grant) Descriptor() ([]byte, []int) {
+	return file_renice_sso_v1_sso_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *Grant) GetUserId() int64 {
+	if x != nil {
+		return x.UserId
+	}
+	return 0
+}
+
+func (x *Grant) GetGrantedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.GrantedAt
+	}
+	return nil
+}
+
 var File_renice_sso_v1_sso_proto protoreflect.FileDescriptor
 
 const file_renice_sso_v1_sso_proto_rawDesc = "" +
@@ -252,10 +664,41 @@ const file_renice_sso_v1_sso_proto_rawDesc = "" +
 	"\n" +
 	"avatar_url\x18\x05 \x01(\tR\tavatarUrl\x129\n" +
 	"\n" +
-	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt2e\n" +
+	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"l\n" +
+	"\x0fGrantAppRequest\x12\x1b\n" +
+	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12#\n" +
+	"\rclient_secret\x18\x02 \x01(\tR\fclientSecret\x12\x17\n" +
+	"\auser_id\x18\x03 \x01(\x03R\x06userId\"g\n" +
+	"\x10GrantAppResponse\x12\x18\n" +
+	"\acreated\x18\x01 \x01(\bR\acreated\x129\n" +
+	"\n" +
+	"granted_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\tgrantedAt\"m\n" +
+	"\x10RevokeAppRequest\x12\x1b\n" +
+	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12#\n" +
+	"\rclient_secret\x18\x02 \x01(\tR\fclientSecret\x12\x17\n" +
+	"\auser_id\x18\x03 \x01(\x03R\x06userId\"-\n" +
+	"\x11RevokeAppResponse\x12\x18\n" +
+	"\arevoked\x18\x01 \x01(\bR\arevoked\"\x91\x01\n" +
+	"\x11ListGrantsRequest\x12\x1b\n" +
+	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12#\n" +
+	"\rclient_secret\x18\x02 \x01(\tR\fclientSecret\x12\x1b\n" +
+	"\tpage_size\x18\x03 \x01(\x05R\bpageSize\x12\x1d\n" +
+	"\n" +
+	"page_token\x18\x04 \x01(\tR\tpageToken\"j\n" +
+	"\x12ListGrantsResponse\x12,\n" +
+	"\x06grants\x18\x01 \x03(\v2\x14.renice.sso.v1.GrantR\x06grants\x12&\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"[\n" +
+	"\x05Grant\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\x03R\x06userId\x129\n" +
+	"\n" +
+	"granted_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\tgrantedAt2\xd5\x02\n" +
 	"\n" +
 	"SSOService\x12W\n" +
-	"\fExchangeCode\x12\".renice.sso.v1.ExchangeCodeRequest\x1a#.renice.sso.v1.ExchangeCodeResponseB\xb3\x01\n" +
+	"\fExchangeCode\x12\".renice.sso.v1.ExchangeCodeRequest\x1a#.renice.sso.v1.ExchangeCodeResponse\x12K\n" +
+	"\bGrantApp\x12\x1e.renice.sso.v1.GrantAppRequest\x1a\x1f.renice.sso.v1.GrantAppResponse\x12N\n" +
+	"\tRevokeApp\x12\x1f.renice.sso.v1.RevokeAppRequest\x1a .renice.sso.v1.RevokeAppResponse\x12Q\n" +
+	"\n" +
+	"ListGrants\x12 .renice.sso.v1.ListGrantsRequest\x1a!.renice.sso.v1.ListGrantsResponseB\xb3\x01\n" +
 	"\x11com.renice.sso.v1B\bSsoProtoP\x01Z>github.com/renice-project/renice-pb/gen/go/renice/sso/v1;ssov1\xa2\x02\x03RSX\xaa\x02\rRenice.Sso.V1\xca\x02\rRenice\\Sso\\V1\xe2\x02\x19Renice\\Sso\\V1\\GPBMetadata\xea\x02\x0fRenice::Sso::V1b\x06proto3"
 
 var (
@@ -270,23 +713,39 @@ func file_renice_sso_v1_sso_proto_rawDescGZIP() []byte {
 	return file_renice_sso_v1_sso_proto_rawDescData
 }
 
-var file_renice_sso_v1_sso_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_renice_sso_v1_sso_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_renice_sso_v1_sso_proto_goTypes = []any{
 	(*ExchangeCodeRequest)(nil),   // 0: renice.sso.v1.ExchangeCodeRequest
 	(*ExchangeCodeResponse)(nil),  // 1: renice.sso.v1.ExchangeCodeResponse
 	(*User)(nil),                  // 2: renice.sso.v1.User
-	(*timestamppb.Timestamp)(nil), // 3: google.protobuf.Timestamp
+	(*GrantAppRequest)(nil),       // 3: renice.sso.v1.GrantAppRequest
+	(*GrantAppResponse)(nil),      // 4: renice.sso.v1.GrantAppResponse
+	(*RevokeAppRequest)(nil),      // 5: renice.sso.v1.RevokeAppRequest
+	(*RevokeAppResponse)(nil),     // 6: renice.sso.v1.RevokeAppResponse
+	(*ListGrantsRequest)(nil),     // 7: renice.sso.v1.ListGrantsRequest
+	(*ListGrantsResponse)(nil),    // 8: renice.sso.v1.ListGrantsResponse
+	(*Grant)(nil),                 // 9: renice.sso.v1.Grant
+	(*timestamppb.Timestamp)(nil), // 10: google.protobuf.Timestamp
 }
 var file_renice_sso_v1_sso_proto_depIdxs = []int32{
-	2, // 0: renice.sso.v1.ExchangeCodeResponse.user:type_name -> renice.sso.v1.User
-	3, // 1: renice.sso.v1.User.created_at:type_name -> google.protobuf.Timestamp
-	0, // 2: renice.sso.v1.SSOService.ExchangeCode:input_type -> renice.sso.v1.ExchangeCodeRequest
-	1, // 3: renice.sso.v1.SSOService.ExchangeCode:output_type -> renice.sso.v1.ExchangeCodeResponse
-	3, // [3:4] is the sub-list for method output_type
-	2, // [2:3] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	2,  // 0: renice.sso.v1.ExchangeCodeResponse.user:type_name -> renice.sso.v1.User
+	10, // 1: renice.sso.v1.User.created_at:type_name -> google.protobuf.Timestamp
+	10, // 2: renice.sso.v1.GrantAppResponse.granted_at:type_name -> google.protobuf.Timestamp
+	9,  // 3: renice.sso.v1.ListGrantsResponse.grants:type_name -> renice.sso.v1.Grant
+	10, // 4: renice.sso.v1.Grant.granted_at:type_name -> google.protobuf.Timestamp
+	0,  // 5: renice.sso.v1.SSOService.ExchangeCode:input_type -> renice.sso.v1.ExchangeCodeRequest
+	3,  // 6: renice.sso.v1.SSOService.GrantApp:input_type -> renice.sso.v1.GrantAppRequest
+	5,  // 7: renice.sso.v1.SSOService.RevokeApp:input_type -> renice.sso.v1.RevokeAppRequest
+	7,  // 8: renice.sso.v1.SSOService.ListGrants:input_type -> renice.sso.v1.ListGrantsRequest
+	1,  // 9: renice.sso.v1.SSOService.ExchangeCode:output_type -> renice.sso.v1.ExchangeCodeResponse
+	4,  // 10: renice.sso.v1.SSOService.GrantApp:output_type -> renice.sso.v1.GrantAppResponse
+	6,  // 11: renice.sso.v1.SSOService.RevokeApp:output_type -> renice.sso.v1.RevokeAppResponse
+	8,  // 12: renice.sso.v1.SSOService.ListGrants:output_type -> renice.sso.v1.ListGrantsResponse
+	9,  // [9:13] is the sub-list for method output_type
+	5,  // [5:9] is the sub-list for method input_type
+	5,  // [5:5] is the sub-list for extension type_name
+	5,  // [5:5] is the sub-list for extension extendee
+	0,  // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_renice_sso_v1_sso_proto_init() }
@@ -300,7 +759,7 @@ func file_renice_sso_v1_sso_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_renice_sso_v1_sso_proto_rawDesc), len(file_renice_sso_v1_sso_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
