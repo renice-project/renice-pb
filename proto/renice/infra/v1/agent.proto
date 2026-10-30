@@ -1,0 +1,374 @@
+syntax = "proto3";
+
+package renice.infra.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// AgentService 是 renice-infra（服务治理平台）的服务端给各台机器上的 renice-agent 用的接口。
+// 只有 agent 主动连服务端，服务端从不连 agent：机器上不开任何入站端口，所有命令都顺着 agent 建立的这条流下发。
+service AgentService {
+  // Connect 是 agent 和服务端之间唯一的一条长连接（双向流）。
+  //
+  // 鉴权：agent 在 gRPC metadata 里带 `authorization: Bearer <agent token>`。token 在平台上添加主机时生成，
+  // 一台主机一个，服务端只存它的 SHA-256。
+  //
+  // 握手与错误码：
+  // 1. 没带 token、token 不存在或已吊销 → UNAUTHENTICATED，流立即关闭。agent 应该停止重连并报错退出，
+  //    因为换不来新结果（运维要重新执行安装命令）。
+  // 2. agent 发的第一条消息必须是 hello，否则 → FAILED_PRECONDITION。
+  // 3. 握手成功后服务端回一条 welcome，之后 agent 每 report_interval_seconds 秒发一条 report。
+  // 4. 同一台主机建立了新连接时，旧连接被服务端以 ABORTED「同一台主机建立了新连接」关闭。
+  //    这通常是 agent 重启后旧连接还没超时，agent 不需要做什么。
+  // 5. 连接期间 token 被吊销 → 服务端以 UNAUTHENTICATED 关闭流。
+  //
+  // 断线与补传（只针对 report）：
+  // - agent 把还没被确认的 report 放在内存里，最多保留最近 10 分钟（按 3 秒一条约 200 条），更早的直接丢弃，
+  //   平台的曲线上那一段显示为缺口。缓存只在内存里：agent 进程重启后缓存丢失，run_id 换新，seq 从 1 重新开始。
+  //   这是有意的取舍：进程重启很少见，丢几分钟监控数据可以接受，不值得为此在机器上落盘。
+  // - 重连后 agent 按 seq 从小到大补发缓存里的 report，然后继续发新的。
+  // - 服务端在一条流上按收到的顺序逐条处理。每处理完一条（写入成功，或者判定为重复）就回一条 report_ack，带上这条的 seq。
+  //   因为同一条流上的消息有序，ack 了 seq=N 就表示这条流上 N 之前送达的 report 也都处理完了，agent 删掉缓存里 seq ≤ N 的。
+  //   agent 自己丢弃的旧 report 不会造成「等不到」的空洞：ack 不要求序号连续。
+  // - 服务端写入失败（例如 VictoriaMetrics 暂时不可用）时不回 ack，而是以 UNAVAILABLE 关闭流；agent 按退避重连后补发。
+  // - 服务端按 (主机, run_id, seq) 去重：记下每个 run_id 已处理的最大 seq，seq 不大于它的 report 直接 ack、不再写入。
+  //   所以「服务端已经写入但 ack 在路上丢了」时重复补发是安全的。
+  //
+  // 容器事件不补传：container_event 只是为了让状态变化比下一次 report 早几秒被看到，丢了也没关系，
+  // 容器的真实状态以 report 里的 containers 为准（OOM 也能从 ContainerMetrics.oom_killed 看出来）。
+  //
+  // agent 收到错误码后怎么做：UNAUTHENTICATED、FAILED_PRECONDITION 是配置或实现问题，重连也不会好，agent 打印服务端给的中文错误后
+  // 以退出码 78 退出（systemd 单元里配 RestartPreventExitStatus=78，不会无限重启）；ABORTED、UNAVAILABLE 以及网络断开都按
+  // 1 秒起步、翻倍、最长 60 秒的退避重连。
+  //
+  // 业务例子：renice-us-1 上的 agent 开机后连上 agent.health.renice.cc:443，发 hello，
+  // 收到 welcome（host_id=3，每 3 秒上报一次），之后每 3 秒发一条 report，服务端写进 VictoriaMetrics 后回 report_ack。
+  rpc Connect(stream ConnectRequest) returns (stream ConnectResponse);
+}
+
+// ConnectRequest 是 agent 发给服务端的一条消息。一条消息只带一种内容。
+message ConnectRequest {
+  // 这条消息的内容。
+  oneof payload {
+    // 握手，必须是连接上的第一条消息。
+    Hello hello = 1;
+    // 一次定时上报：主机指标和全部容器的状态。
+    Report report = 2;
+    // 容器状态突变（启动、退出、OOM、健康状态变化），在下一次 report 之前立刻上报。
+    ContainerEvent container_event = 3;
+    // 主机静态信息有变化时（或每小时一次）重新上报，例如加了一块盘、内核升级后重启。
+    HostInfo host_info = 4;
+  }
+}
+
+// ConnectResponse 是服务端发给 agent 的一条消息。一条消息只带一种内容。
+message ConnectResponse {
+  // 这条消息的内容。
+  oneof payload {
+    // 握手成功，告诉 agent 它是哪台主机、多久上报一次。
+    Welcome welcome = 1;
+    // 确认某条 report 已经处理完，agent 从缓存里删掉 seq 不大于它的 report。
+    ReportAck report_ack = 2;
+  }
+}
+
+// Hello 是 agent 连上之后发的第一条消息。
+message Hello {
+  // agent 的版本号。例："0.1.0-alpha.1"
+  string agent_version = 1;
+  // 本次开机的 ID（/proc/sys/kernel/random/boot_id），机器重启后会变。服务端靠它识别网卡计数器归零，
+  // 让月流量统计不被重启清零。例："6f1c2d3e-4b5a-4c7d-9e8f-0a1b2c3d4e5f"
+  string boot_id = 2;
+  // 主机静态信息。
+  HostInfo host_info = 3;
+  // 这台 agent 在本地配置里启用的额外角色。服务端只给启用了对应角色的 agent 派对应的命令。
+  // 例：[AGENT_ROLE_BUILDER, AGENT_ROLE_PROBER, AGENT_ROLE_WATCHDOG]（renice-us-1）
+  repeated AgentRole roles = 4;
+  // 这次 agent 进程启动时生成的随机 ID（UUID），进程重启就换一个。report 的 seq 在同一个 run_id 内递增。
+  // 例："0b9e7a52-1c3d-4e8f-a6b7-c8d9e0f1a2b3"
+  string run_id = 5;
+}
+
+// AgentRole 是 agent 除基础采集以外能承担的额外角色，在 agent 的本地配置里开启。
+enum AgentRole {
+  // 未指定，服务端忽略。
+  AGENT_ROLE_UNSPECIFIED = 0;
+  // CI 构建机：拉代码、构建镜像、推送到 registry。例：renice-us-1
+  AGENT_ROLE_BUILDER = 1;
+  // HTTP 探测执行者：从外网的角度探测各服务的域名。例：renice-us-1
+  AGENT_ROLE_PROBER = 2;
+  // 看门狗：探测平台本体，平台挂了时自己发告警邮件。例：renice-us-1
+  AGENT_ROLE_WATCHDOG = 3;
+  // 解析执行者：调用阿里云 DNS API，阿里云 key 只放在这类机器上。例：renice-us-2、renice-us-storage
+  AGENT_ROLE_DNS = 4;
+}
+
+// HostInfo 是主机的静态信息，很少变化。
+message HostInfo {
+  // 主机名。例："renice-us-1"
+  string hostname = 1;
+  // 发行版名称和版本（/etc/os-release 的 PRETTY_NAME）。例："Debian GNU/Linux 13 (trixie)"
+  string os = 2;
+  // 内核版本（uname -r）。例："6.12.48+deb13-amd64"
+  string kernel = 3;
+  // CPU 架构（uname -m）。例："x86_64"
+  string arch = 4;
+  // CPU 型号。例："AMD Ryzen 9 9950X 16-Core Processor"
+  string cpu_model = 5;
+  // 逻辑核数。例：2
+  int32 cpu_cores = 6;
+  // 物理内存总量，字节。例：4111499264（约 3.9 GiB）
+  int64 mem_total_bytes = 7;
+  // swap 总量，字节；没有 swap 时为 0。例：0
+  int64 swap_total_bytes = 8;
+  // 虚拟化类型（systemd-detect-virt 的输出）；物理机为 "none"。例："kvm"
+  string virtualization = 9;
+  // 本次开机的时间。例：2026-10-29T03:12:45+08:00
+  google.protobuf.Timestamp boot_time = 10;
+  // 是否能读到 /proc/pressure（PSI）。读不到时 report 里不带 psi。例：true
+  bool psi_available = 11;
+  // 是否能连上 docker.sock。连不上时 report 里的 containers 为空，平台显示「未安装 Docker」。例：true
+  bool docker_available = 12;
+  // Docker Engine 版本；docker_available 为 false 时为空。例："29.9.2"
+  string docker_version = 13;
+}
+
+// Welcome 是服务端对 hello 的回复，表示握手成功。
+message Welcome {
+  // 这台 agent 在平台上对应的主机 ID。例：3
+  int64 host_id = 1;
+  // 多少秒上报一次 report。例：3
+  int32 report_interval_seconds = 2;
+  // 服务端的当前时间。agent 可以拿它和本机时间对比，相差超过 5 秒时在日志里告警。例：2026-10-30T23:05:00+08:00
+  google.protobuf.Timestamp server_time = 3;
+}
+
+// Report 是一次定时上报。
+message Report {
+  // 这条 report 的序号，同一个 run_id 内从 1 开始严格递增；agent 进程重启后（run_id 换新）从 1 重新开始。服务端按 (主机, run_id, seq) 去重。例：28800
+  int64 seq = 1;
+  // 采样结束的时间，指标里的速率都是「上一次采样到这一刻」的平均值。例：2026-10-30T23:05:03+08:00
+  google.protobuf.Timestamp sampled_at = 2;
+  // 采样时的开机 ID。服务端用它判断 rx/tx_bytes_total 这组累计计数器属于哪一次开机，开机 ID 变了就从 0 重新累加。
+  // 例："6f1c2d3e-4b5a-4c7d-9e8f-0a1b2c3d4e5f"
+  string boot_id = 3;
+  // 主机指标。
+  HostMetrics host = 4;
+  // 机器上的全部容器（包括已停止的），docker_available 为 false 时为空。
+  repeated ContainerMetrics containers = 5;
+  // 产生这条 report 的 agent 进程的 run_id，和 hello 里的一致。例："0b9e7a52-1c3d-4e8f-a6b7-c8d9e0f1a2b3"
+  string run_id = 6;
+}
+
+// HostMetrics 是一次上报里的主机指标。速率是两次上报之间的平均值，峰值是这段时间里每秒采样的最大值。
+message HostMetrics {
+  // 整机 CPU 使用率，0–100，按全部逻辑核折算。例：37.5
+  double cpu_percent = 1;
+  // iowait 占比，0–100。例：0.8
+  double cpu_iowait_percent = 2;
+  // steal 占比，0–100；被宿主机抢走的 CPU，VPS 超售时会变高。例：1.2
+  double cpu_steal_percent = 3;
+  // 1 分钟平均负载。例：0.42
+  double load1 = 4;
+  // 5 分钟平均负载。例：0.35
+  double load5 = 5;
+  // 15 分钟平均负载。例：0.30
+  double load15 = 6;
+  // 可用内存（/proc/meminfo 的 MemAvailable），字节。已用 = mem_total_bytes - mem_available_bytes。例：3221225472
+  int64 mem_available_bytes = 7;
+  // 已用 swap，字节。例：0
+  int64 swap_used_bytes = 8;
+  // 每个挂载点的容量。只包含真实文件系统，跳过 tmpfs、overlay、proc 等虚拟文件系统。
+  repeated DiskUsage disks = 9;
+  // 每块磁盘的 IO 速率。只包含整盘设备（vda、nvme0n1），不包含分区和 loop 设备。
+  repeated DiskIO disk_io = 10;
+  // 网络。
+  NetMetrics net = 11;
+  // PSI（压力指标）。主机不支持 PSI 时不带这个字段。
+  Psi psi = 12;
+  // ESTABLISHED 状态的 TCP 连接数（IPv4 + IPv6）。例：214
+  int64 tcp_established = 13;
+  // 开机以来的秒数。例：172800
+  int64 uptime_seconds = 14;
+}
+
+// DiskUsage 是一个挂载点的容量。
+message DiskUsage {
+  // 挂载点。例："/"
+  string mount = 1;
+  // 设备名。例："/dev/vda1"
+  string device = 2;
+  // 文件系统类型。例："ext4"
+  string fs_type = 3;
+  // 总容量，字节。例：53660876800（50 GiB）
+  int64 total_bytes = 4;
+  // 已用，字节（按 df 的口径：不含 root 保留块）。例：9985589248
+  int64 used_bytes = 5;
+}
+
+// DiskIO 是一块磁盘的 IO 速率。
+message DiskIO {
+  // 设备名。例："vda"
+  string device = 1;
+  // 读速率，字节/秒。例：1048576
+  double read_bytes_per_sec = 2;
+  // 写速率，字节/秒。例：4194304
+  double write_bytes_per_sec = 3;
+  // 每秒读次数。例：12.5
+  double read_iops = 4;
+  // 每秒写次数。例：85.0
+  double write_iops = 5;
+}
+
+// NetMetrics 是主机的网络指标，只统计物理网卡：跳过 lo，以及 docker*、br-*、veth*、virbr*、tun*、wg* 这些虚拟网卡，
+// 否则容器之间的流量会被重复计算。
+message NetMetrics {
+  // 下行（接收）平均速率，字节/秒。例：262144
+  double rx_bytes_per_sec = 1;
+  // 上行（发送）平均速率，字节/秒。例：1310720
+  double tx_bytes_per_sec = 2;
+  // 这段时间里每秒采样的下行峰值，字节/秒。例：524288
+  double rx_peak_bytes_per_sec = 3;
+  // 这段时间里每秒采样的上行峰值，字节/秒。例：3145728
+  double tx_peak_bytes_per_sec = 4;
+  // 开机以来累计接收，字节（各物理网卡计数器之和）。重启后从 0 开始，服务端按 boot_id 拼接成月流量。例：98765432100
+  int64 rx_bytes_total = 5;
+  // 开机以来累计发送，字节。例：123456789000
+  int64 tx_bytes_total = 6;
+}
+
+// Psi 是 /proc/pressure 下的 10 秒平均值，单位是百分比，0–100。
+message Psi {
+  // 至少有一个任务在等 CPU 的时间占比。例：2.15
+  double cpu_some_avg10 = 1;
+  // 所有任务都在等 CPU 的时间占比；老内核没有这一项时为 0。例：0.0
+  double cpu_full_avg10 = 2;
+  // 至少有一个任务在等内存的时间占比。例：0.0
+  double memory_some_avg10 = 3;
+  // 所有任务都在等内存的时间占比。例：0.0
+  double memory_full_avg10 = 4;
+  // 至少有一个任务在等 IO 的时间占比。例：0.35
+  double io_some_avg10 = 5;
+  // 所有任务都在等 IO 的时间占比。例：0.10
+  double io_full_avg10 = 6;
+}
+
+// ContainerMetrics 是一个容器在这次上报时的状态和资源使用。
+message ContainerMetrics {
+  // 容器 ID（完整 64 位）。例："3f2a9c1b7e5d..."
+  string id = 1;
+  // 容器名（不带前导斜杠）。例："renice-sso-server"
+  string name = 2;
+  // 镜像名和 tag。例："registry.renice.cc/renice-sso-server:v0.1.0-alpha.3"
+  string image = 3;
+  // 运行状态。例：CONTAINER_STATE_RUNNING
+  ContainerState state = 4;
+  // 健康检查状态；容器没配置 healthcheck 时为 CONTAINER_HEALTH_NONE。例：CONTAINER_HEALTH_HEALTHY
+  ContainerHealth health = 5;
+  // 最近一次健康检查的输出（Docker 的 State.Health.Log 最后一条），截断到 4096 字节。
+  // 模板服务的后端会在这里打印 /readyz 的 JSON，里面有 version 和 checks。
+  // 例："{\"checks\":{\"postgres\":\"ok\",\"redis\":\"ok\"},\"status\":\"ok\",\"version\":\"0.1.0-alpha.3\"}"
+  string health_output = 6;
+  // 重启次数（Docker 的 RestartCount）。例：0
+  int32 restart_count = 7;
+  // 容器创建时间。例：2026-10-30T22:10:31+08:00
+  google.protobuf.Timestamp created_at = 8;
+  // 最近一次启动时间；从未启动过时不带。例：2026-10-30T22:10:32+08:00
+  google.protobuf.Timestamp started_at = 9;
+  // 最近一次退出码；运行中时为 0。例：137
+  int32 exit_code = 10;
+  // compose 项目名（标签 com.docker.compose.project）；不是 compose 起的容器为空。例："renice-sso"
+  string compose_project = 11;
+  // compose 服务名（标签 com.docker.compose.service）。例："server"
+  string compose_service = 12;
+  // CPU 使用率，0–100，按整机全部逻辑核折算（和 HostMetrics.cpu_percent 同一个口径，不是 docker stats 那种按单核算、可以超过 100 的值）。
+  // 容器没在运行时为 0。例：3.2
+  double cpu_percent = 13;
+  // 内存使用，字节（不含 page cache，和 docker stats 一致）。例：52428800
+  int64 mem_usage_bytes = 14;
+  // 内存上限，字节；没设上限时等于主机内存总量。例：4111499264
+  int64 mem_limit_bytes = 15;
+  // 下行平均速率，字节/秒。例：20480
+  double net_rx_bytes_per_sec = 16;
+  // 上行平均速率，字节/秒。例：40960
+  double net_tx_bytes_per_sec = 17;
+  // 块设备读速率，字节/秒。例：0
+  double block_read_bytes_per_sec = 18;
+  // 块设备写速率，字节/秒。例：8192
+  double block_write_bytes_per_sec = 19;
+  // 最近一次退出是不是因为内存超限被内核杀掉（Docker 的 State.OOMKilled）。容器事件丢了也能从这里看出 OOM。例：false
+  bool oom_killed = 20;
+}
+
+// ContainerState 是容器的运行状态（Docker 的 State.Status）。
+enum ContainerState {
+  // 未知状态，Docker 返回了这里没有列出的值。
+  CONTAINER_STATE_UNSPECIFIED = 0;
+  // 已创建，从未启动。
+  CONTAINER_STATE_CREATED = 1;
+  // 运行中。
+  CONTAINER_STATE_RUNNING = 2;
+  // 已暂停（docker pause）。
+  CONTAINER_STATE_PAUSED = 3;
+  // 正在重启（restart 策略正在拉起）。
+  CONTAINER_STATE_RESTARTING = 4;
+  // 已退出。
+  CONTAINER_STATE_EXITED = 5;
+  // 正在删除。
+  CONTAINER_STATE_REMOVING = 6;
+  // 已死亡（Docker 删不掉的残留容器）。
+  CONTAINER_STATE_DEAD = 7;
+}
+
+// ContainerHealth 是容器的健康检查状态（Docker 的 State.Health.Status）。
+enum ContainerHealth {
+  // 未知。
+  CONTAINER_HEALTH_UNSPECIFIED = 0;
+  // 容器没有配置 healthcheck。
+  CONTAINER_HEALTH_NONE = 1;
+  // 还在 start_period 里，健康检查还没有通过过。
+  CONTAINER_HEALTH_STARTING = 2;
+  // 健康。
+  CONTAINER_HEALTH_HEALTHY = 3;
+  // 连续失败次数达到 retries，不健康。
+  CONTAINER_HEALTH_UNHEALTHY = 4;
+}
+
+// ContainerEvent 是一次容器状态突变，来自 docker events。
+message ContainerEvent {
+  // 容器 ID。例："3f2a9c1b7e5d..."
+  string container_id = 1;
+  // 容器名。例："renice-sso-server"
+  string container_name = 2;
+  // 发生了什么。例：CONTAINER_EVENT_TYPE_DIE
+  ContainerEventType type = 3;
+  // 退出码；只有 type 是 CONTAINER_EVENT_TYPE_DIE 时有意义。例：137
+  int32 exit_code = 4;
+  // 变化后的健康状态；只有 type 是 CONTAINER_EVENT_TYPE_HEALTH 时有意义。例：CONTAINER_HEALTH_UNHEALTHY
+  ContainerHealth health = 5;
+  // 事件发生的时间（Docker 给的时间）。例：2026-10-30T23:04:12+08:00
+  google.protobuf.Timestamp occurred_at = 6;
+}
+
+// ContainerEventType 是容器事件的类型，只上报会影响状态判断的几种。
+enum ContainerEventType {
+  // 未指定，服务端忽略。
+  CONTAINER_EVENT_TYPE_UNSPECIFIED = 0;
+  // 容器启动了。
+  CONTAINER_EVENT_TYPE_START = 1;
+  // 容器进程退出了（包括被 kill 和崩溃）。
+  CONTAINER_EVENT_TYPE_DIE = 2;
+  // 容器因为内存超限被内核杀掉。
+  CONTAINER_EVENT_TYPE_OOM = 3;
+  // 健康状态变了（health_status 事件）。
+  CONTAINER_EVENT_TYPE_HEALTH = 4;
+  // 容器被删除了。
+  CONTAINER_EVENT_TYPE_DESTROY = 5;
+}
+
+// ReportAck 确认 report 已经写入。
+message ReportAck {
+  // 被确认的 report 所属的 agent 进程 run_id。和当前 run_id 不一致的 ack（上一个进程留下的），agent 忽略。例："0b9e7a52-1c3d-4e8f-a6b7-c8d9e0f1a2b3"
+  string run_id = 1;
+  // 刚处理完的那条 report 的 seq。这条流上在它之前送达的 report 都已处理完，agent 删掉缓存里 seq 不大于它的 report。例：28800
+  int64 seq = 2;
+}
