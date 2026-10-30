@@ -5,7 +5,7 @@
 ## 2026-10-30
 
 - 新增 `renice.infra.v1.AgentService.Connect`：renice-infra（服务治理平台）的 agent 主动连服务端的双向流，握手（Hello / Welcome）、每 3 秒一次的主机与容器上报（Report / ReportAck，断线补传按 boot_id + seq 去重）、容器事件和主机静态信息。背景：agent 只出不进，命令以后也顺着这条流下发，本次只放采集需要的消息，发布、构建、探测、解析的命令在各自里程碑里加（ADR：renice-infra 0002）。
-- 补充 `ContainerEvent` 的 event_seq / ContainerEventAck 断线补传、确认和去重语义，并明确 agent 收到 `FAILED_PRECONDITION` 时停止自动重连。
+- 补充 `ContainerEvent` 的 event_seq / ContainerEventAck 确认去重语义；agent 持久化未确认队列、run_id 和序号，进程或机器重启后恢复补传，持久化状态丢失时告警并轮换 run_id；明确收到 `FAILED_PRECONDITION` 后停止自动重连。
 - 不再发版本：各服务 `go get ...@main` 钉提交。`v0.1.0`、`v0.2.0` 两个 tag 保留。
 - 注释：`ListGrants` 的 page_token 错误条件改成「不是规范的正整数十进制串」，和 renice-sso 的实现一致（原来写的「不是上一页返回的值」比实现严，renice-sso#19 CR 指出）。
 

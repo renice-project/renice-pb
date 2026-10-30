@@ -44,11 +44,9 @@ type AgentServiceClient interface {
 	//    这通常是 agent 重启后旧连接还没超时，agent 不需要做什么。
 	// 5. 连接期间 token 被吊销 → 服务端以 UNAUTHENTICATED 关闭流。
 	//
-	// 断线与补传：agent 把还没收到 report_ack 的 report 和还没收到 container_event_ack 的事件留在本地，
-	// 最多保留 10 分钟，超出的丢弃。重连后分别按 report.seq 和 container_event.event_seq 从小到大补发。
+	// 断线与补传：agent 把还没收到 report_ack 的 report 和还没收到 container_event_ack 的事件写入本机持久化队列，最多保留 10 分钟，超出的丢弃。队列、run_id 和各自序号必须在发送前持久化，收到 ack 后再持久化删除；进程重启或机器重启后先恢复队列，再按 report.seq 和 container_event.event_seq 从小到大补发。持久化状态仍在时 run_id 不因进程或机器重启而改变，序号继续递增。
 	// 服务端按 (主机, run_id, seq) 去重 report，按 (主机, run_id, event_seq) 去重事件，所以重复补发是安全的：
-	// 服务端已处理但 ack 丢失时会再次收到并返回相同确认；服务端尚未处理时会正常处理；重复补发只会被确认而不会重复落库。
-	// agent 进程重启后本地缓存随之丢失，run_id 也会换新，seq 从 1 重新开始，不会被误判成重复。
+	// 服务端已处理但 ack 丢失时会再次收到并返回相同确认；服务端尚未处理时会正常处理；重复补发只会被确认而不会重复落库。只有持久化数据目录丢失或损坏时，未确认队列无法恢复；agent 必须记录数据丢失告警并创建新的 run_id，不能伪装成已补传。
 	//
 	// 业务例子：renice-us-1 上的 agent 开机后连上 agent.health.renice.cc:443，发 hello，
 	// 收到 welcome（host_id=3，每 3 秒上报一次），之后每 3 秒发一条 report，服务端写进 VictoriaMetrics 后回 report_ack。
@@ -98,11 +96,9 @@ type AgentServiceServer interface {
 	//    这通常是 agent 重启后旧连接还没超时，agent 不需要做什么。
 	// 5. 连接期间 token 被吊销 → 服务端以 UNAUTHENTICATED 关闭流。
 	//
-	// 断线与补传：agent 把还没收到 report_ack 的 report 和还没收到 container_event_ack 的事件留在本地，
-	// 最多保留 10 分钟，超出的丢弃。重连后分别按 report.seq 和 container_event.event_seq 从小到大补发。
+	// 断线与补传：agent 把还没收到 report_ack 的 report 和还没收到 container_event_ack 的事件写入本机持久化队列，最多保留 10 分钟，超出的丢弃。队列、run_id 和各自序号必须在发送前持久化，收到 ack 后再持久化删除；进程重启或机器重启后先恢复队列，再按 report.seq 和 container_event.event_seq 从小到大补发。持久化状态仍在时 run_id 不因进程或机器重启而改变，序号继续递增。
 	// 服务端按 (主机, run_id, seq) 去重 report，按 (主机, run_id, event_seq) 去重事件，所以重复补发是安全的：
-	// 服务端已处理但 ack 丢失时会再次收到并返回相同确认；服务端尚未处理时会正常处理；重复补发只会被确认而不会重复落库。
-	// agent 进程重启后本地缓存随之丢失，run_id 也会换新，seq 从 1 重新开始，不会被误判成重复。
+	// 服务端已处理但 ack 丢失时会再次收到并返回相同确认；服务端尚未处理时会正常处理；重复补发只会被确认而不会重复落库。只有持久化数据目录丢失或损坏时，未确认队列无法恢复；agent 必须记录数据丢失告警并创建新的 run_id，不能伪装成已补传。
 	//
 	// 业务例子：renice-us-1 上的 agent 开机后连上 agent.health.renice.cc:443，发 hello，
 	// 收到 welcome（host_id=3，每 3 秒上报一次），之后每 3 秒发一条 report，服务端写进 VictoriaMetrics 后回 report_ack。

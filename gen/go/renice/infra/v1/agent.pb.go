@@ -520,7 +520,7 @@ type Hello struct {
 	// 这台 agent 在本地配置里启用的额外角色。服务端只给启用了对应角色的 agent 派对应的命令。
 	// 例：[AGENT_ROLE_BUILDER, AGENT_ROLE_PROBER, AGENT_ROLE_WATCHDOG]（renice-us-1）
 	Roles []AgentRole `protobuf:"varint,4,rep,packed,name=roles,proto3,enum=renice.infra.v1.AgentRole" json:"roles,omitempty"`
-	// 这次 agent 进程启动时生成的随机 ID（UUID），进程重启就换一个。report 的 seq 在同一个 run_id 内递增。
+	// 持久化状态中保存的随机 ID（UUID）；进程或机器重启后继续使用，持久化状态丢失或损坏时才重新生成。report 和事件序号分别在该 run_id 内严格递增。
 	// 例："0b9e7a52-1c3d-4e8f-a6b7-c8d9e0f1a2b3"
 	RunId         string `protobuf:"bytes,5,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -813,7 +813,7 @@ func (x *Welcome) GetServerTime() *timestamppb.Timestamp {
 // Report 是一次定时上报。
 type Report struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// 这条 report 的序号，同一个 run_id 内从 1 开始严格递增；agent 进程重启后（run_id 换新）从 1 重新开始。服务端按 (主机, run_id, seq) 去重。例：28800
+	// 这条 report 的序号，同一个 run_id 内从 1 开始严格递增并持久化；agent 重启后继续递增。服务端按 (主机, run_id, seq) 去重。例：28800
 	Seq int64 `protobuf:"varint,1,opt,name=seq,proto3" json:"seq,omitempty"`
 	// 采样结束的时间，指标里的速率都是「上一次采样到这一刻」的平均值。例：2026-10-30T23:05:03+08:00
 	SampledAt *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=sampled_at,json=sampledAt,proto3" json:"sampled_at,omitempty"`
@@ -824,7 +824,7 @@ type Report struct {
 	Host *HostMetrics `protobuf:"bytes,4,opt,name=host,proto3" json:"host,omitempty"`
 	// 机器上的全部容器（包括已停止的），docker_available 为 false 时为空。
 	Containers []*ContainerMetrics `protobuf:"bytes,5,rep,name=containers,proto3" json:"containers,omitempty"`
-	// 产生这条 report 的 agent 进程的 run_id，和 hello 里的一致。例："0b9e7a52-1c3d-4e8f-a6b7-c8d9e0f1a2b3"
+	// 产生这条 report 的持久化 agent 状态 run_id，和 hello 里的一致。例："0b9e7a52-1c3d-4e8f-a6b7-c8d9e0f1a2b3"
 	RunId         string `protobuf:"bytes,6,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1638,9 +1638,9 @@ type ContainerEvent struct {
 	Health ContainerHealth `protobuf:"varint,5,opt,name=health,proto3,enum=renice.infra.v1.ContainerHealth" json:"health,omitempty"`
 	// 事件发生的时间（Docker 给的时间）。例：2026-10-30T23:04:12+08:00
 	OccurredAt *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=occurred_at,json=occurredAt,proto3" json:"occurred_at,omitempty"`
-	// 产生这条事件的 agent 进程的 run_id，和 hello 里的一致；agent 重启后会换新。例："0b9e7a52-1c3d-4e8f-a6b7-c8d9e0f1a2b3"
+	// 产生这条事件的持久化 agent 状态 run_id，和 hello 里的一致；进程或机器重启后不变。例："0b9e7a52-1c3d-4e8f-a6b7-c8d9e0f1a2b3"
 	RunId string `protobuf:"bytes,7,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
-	// 这次 agent 进程内的事件序号，从 1 开始递增；agent 只在收到 ack 后删除本地缓存。例：42
+	// 同一个 run_id 内从 1 开始严格递增并持久化；agent 重启后继续递增。agent 只在收到 ack 后持久化删除该事件。例：42
 	EventSeq      int64 `protobuf:"varint,8,opt,name=event_seq,json=eventSeq,proto3" json:"event_seq,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
