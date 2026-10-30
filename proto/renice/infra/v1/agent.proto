@@ -15,14 +15,17 @@ service AgentService {
   // 握手与错误码：
   // 1. 没带 token、token 不存在或已吊销 → UNAUTHENTICATED，流立即关闭。agent 应该停止重连并报错退出，
   //    因为换不来新结果（运维要重新执行安装命令）。
-  // 2. agent 发的第一条消息必须是 hello，否则 → FAILED_PRECONDITION。
+  // 2. agent 发的第一条消息必须是 hello，否则 → FAILED_PRECONDITION。agent 将这类错误视为当前
+  //    agent 实现或配置错误，记录服务端返回的中文错误并停止当前流的自动重连，需修复或升级后再启动。
   // 3. 握手成功后服务端回一条 welcome，之后 agent 每 report_interval_seconds 秒发一条 report。
   // 4. 同一台主机建立了新连接时，旧连接被服务端以 ABORTED「同一台主机建立了新连接」关闭。
   //    这通常是 agent 重启后旧连接还没超时，agent 不需要做什么。
   // 5. 连接期间 token 被吊销 → 服务端以 UNAUTHENTICATED 关闭流。
   //
-  // 断线与补传：agent 把还没收到 report_ack 的 report 留在本地，最多保留 10 分钟，超出的丢弃。
-  // 重连后按 seq 从小到大补发，服务端按 (主机, run_id, seq) 去重，所以重复补发是安全的。
+  // 断线与补传：agent 把还没收到 report_ack 的 report 和还没收到 container_event_ack 的事件留在本地，
+  // 最多保留 10 分钟，超出的丢弃。重连后分别按 report.seq 和 container_event.event_seq 从小到大补发。
+  // 服务端按 (主机, run_id, seq) 去重 report，按 (主机, run_id, event_seq) 去重事件，所以重复补发是安全的：
+  // 服务端已处理但 ack 丢失时会再次收到并返回相同确认；服务端尚未处理时会正常处理；重复补发只会被确认而不会重复落库。
   // agent 进程重启后本地缓存随之丢失，run_id 也会换新，seq 从 1 重新开始，不会被误判成重复。
   //
   // 业务例子：renice-us-1 上的 agent 开机后连上 agent.health.renice.cc:443，发 hello，
@@ -53,6 +56,8 @@ message ConnectResponse {
     Welcome welcome = 1;
     // 确认某条 report 已经写入，agent 可以从本地缓存里删掉 seq 不大于它的 report。
     ReportAck report_ack = 2;
+    // 确认容器事件已经写入，agent 可以从本地缓存里删掉 event_seq 不大于它的事件。例：run_id="...", event_seq=42
+    ContainerEventAck container_event_ack = 3;
   }
 }
 
@@ -330,6 +335,10 @@ message ContainerEvent {
   ContainerHealth health = 5;
   // 事件发生的时间（Docker 给的时间）。例：2026-10-30T23:04:12+08:00
   google.protobuf.Timestamp occurred_at = 6;
+  // 产生这条事件的 agent 进程的 run_id，和 hello 里的一致；agent 重启后会换新。例："0b9e7a52-1c3d-4e8f-a6b7-c8d9e0f1a2b3"
+  string run_id = 7;
+  // 这次 agent 进程内的事件序号，从 1 开始递增；agent 只在收到 ack 后删除本地缓存。例：42
+  int64 event_seq = 8;
 }
 
 // ContainerEventType 是容器事件的类型，只上报会影响状态判断的几种。
@@ -354,4 +363,12 @@ message ReportAck {
   string run_id = 1;
   // 这个 run_id 下已经连续写入的最大 seq（1..seq 都已写入），agent 删掉本地缓存里 seq 不大于它的 report。例：28800
   int64 seq = 2;
+}
+
+// ContainerEventAck 确认容器事件已经写入。
+message ContainerEventAck {
+  // 已经写入的事件所属的 agent 进程 run_id；和当前 run_id 不一致的 ack，agent 忽略。例："0b9e7a52-1c3d-4e8f-a6b7-c8d9e0f1a2b3"
+  string run_id = 1;
+  // 这个 run_id 下已经连续写入的最大事件序号（1..event_seq 都已写入），agent 删除本地缓存里 event_seq 不大于它的事件。例：42
+  int64 event_seq = 2;
 }

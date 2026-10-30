@@ -37,14 +37,17 @@ type AgentServiceClient interface {
 	// 握手与错误码：
 	// 1. 没带 token、token 不存在或已吊销 → UNAUTHENTICATED，流立即关闭。agent 应该停止重连并报错退出，
 	//    因为换不来新结果（运维要重新执行安装命令）。
-	// 2. agent 发的第一条消息必须是 hello，否则 → FAILED_PRECONDITION。
+	// 2. agent 发的第一条消息必须是 hello，否则 → FAILED_PRECONDITION。agent 将这类错误视为当前
+	//    agent 实现或配置错误，记录服务端返回的中文错误并停止当前流的自动重连，需修复或升级后再启动。
 	// 3. 握手成功后服务端回一条 welcome，之后 agent 每 report_interval_seconds 秒发一条 report。
 	// 4. 同一台主机建立了新连接时，旧连接被服务端以 ABORTED「同一台主机建立了新连接」关闭。
 	//    这通常是 agent 重启后旧连接还没超时，agent 不需要做什么。
 	// 5. 连接期间 token 被吊销 → 服务端以 UNAUTHENTICATED 关闭流。
 	//
-	// 断线与补传：agent 把还没收到 report_ack 的 report 留在本地，最多保留 10 分钟，超出的丢弃。
-	// 重连后按 seq 从小到大补发，服务端按 (主机, run_id, seq) 去重，所以重复补发是安全的。
+	// 断线与补传：agent 把还没收到 report_ack 的 report 和还没收到 container_event_ack 的事件留在本地，
+	// 最多保留 10 分钟，超出的丢弃。重连后分别按 report.seq 和 container_event.event_seq 从小到大补发。
+	// 服务端按 (主机, run_id, seq) 去重 report，按 (主机, run_id, event_seq) 去重事件，所以重复补发是安全的：
+	// 服务端已处理但 ack 丢失时会再次收到并返回相同确认；服务端尚未处理时会正常处理；重复补发只会被确认而不会重复落库。
 	// agent 进程重启后本地缓存随之丢失，run_id 也会换新，seq 从 1 重新开始，不会被误判成重复。
 	//
 	// 业务例子：renice-us-1 上的 agent 开机后连上 agent.health.renice.cc:443，发 hello，
@@ -88,14 +91,17 @@ type AgentServiceServer interface {
 	// 握手与错误码：
 	// 1. 没带 token、token 不存在或已吊销 → UNAUTHENTICATED，流立即关闭。agent 应该停止重连并报错退出，
 	//    因为换不来新结果（运维要重新执行安装命令）。
-	// 2. agent 发的第一条消息必须是 hello，否则 → FAILED_PRECONDITION。
+	// 2. agent 发的第一条消息必须是 hello，否则 → FAILED_PRECONDITION。agent 将这类错误视为当前
+	//    agent 实现或配置错误，记录服务端返回的中文错误并停止当前流的自动重连，需修复或升级后再启动。
 	// 3. 握手成功后服务端回一条 welcome，之后 agent 每 report_interval_seconds 秒发一条 report。
 	// 4. 同一台主机建立了新连接时，旧连接被服务端以 ABORTED「同一台主机建立了新连接」关闭。
 	//    这通常是 agent 重启后旧连接还没超时，agent 不需要做什么。
 	// 5. 连接期间 token 被吊销 → 服务端以 UNAUTHENTICATED 关闭流。
 	//
-	// 断线与补传：agent 把还没收到 report_ack 的 report 留在本地，最多保留 10 分钟，超出的丢弃。
-	// 重连后按 seq 从小到大补发，服务端按 (主机, run_id, seq) 去重，所以重复补发是安全的。
+	// 断线与补传：agent 把还没收到 report_ack 的 report 和还没收到 container_event_ack 的事件留在本地，
+	// 最多保留 10 分钟，超出的丢弃。重连后分别按 report.seq 和 container_event.event_seq 从小到大补发。
+	// 服务端按 (主机, run_id, seq) 去重 report，按 (主机, run_id, event_seq) 去重事件，所以重复补发是安全的：
+	// 服务端已处理但 ack 丢失时会再次收到并返回相同确认；服务端尚未处理时会正常处理；重复补发只会被确认而不会重复落库。
 	// agent 进程重启后本地缓存随之丢失，run_id 也会换新，seq 从 1 重新开始，不会被误判成重复。
 	//
 	// 业务例子：renice-us-1 上的 agent 开机后连上 agent.health.renice.cc:443，发 hello，

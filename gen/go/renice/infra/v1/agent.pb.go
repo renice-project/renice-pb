@@ -412,6 +412,7 @@ type ConnectResponse struct {
 	//
 	//	*ConnectResponse_Welcome
 	//	*ConnectResponse_ReportAck
+	//	*ConnectResponse_ContainerEventAck
 	Payload       isConnectResponse_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -472,6 +473,15 @@ func (x *ConnectResponse) GetReportAck() *ReportAck {
 	return nil
 }
 
+func (x *ConnectResponse) GetContainerEventAck() *ContainerEventAck {
+	if x != nil {
+		if x, ok := x.Payload.(*ConnectResponse_ContainerEventAck); ok {
+			return x.ContainerEventAck
+		}
+	}
+	return nil
+}
+
 type isConnectResponse_Payload interface {
 	isConnectResponse_Payload()
 }
@@ -486,9 +496,16 @@ type ConnectResponse_ReportAck struct {
 	ReportAck *ReportAck `protobuf:"bytes,2,opt,name=report_ack,json=reportAck,proto3,oneof"`
 }
 
+type ConnectResponse_ContainerEventAck struct {
+	// 确认容器事件已经写入，agent 可以从本地缓存里删掉 event_seq 不大于它的事件。例：run_id="...", event_seq=42
+	ContainerEventAck *ContainerEventAck `protobuf:"bytes,3,opt,name=container_event_ack,json=containerEventAck,proto3,oneof"`
+}
+
 func (*ConnectResponse_Welcome) isConnectResponse_Payload() {}
 
 func (*ConnectResponse_ReportAck) isConnectResponse_Payload() {}
+
+func (*ConnectResponse_ContainerEventAck) isConnectResponse_Payload() {}
 
 // Hello 是 agent 连上之后发的第一条消息。
 type Hello struct {
@@ -1620,7 +1637,11 @@ type ContainerEvent struct {
 	// 变化后的健康状态；只有 type 是 CONTAINER_EVENT_TYPE_HEALTH 时有意义。
 	Health ContainerHealth `protobuf:"varint,5,opt,name=health,proto3,enum=renice.infra.v1.ContainerHealth" json:"health,omitempty"`
 	// 事件发生的时间（Docker 给的时间）。例：2026-10-30T23:04:12+08:00
-	OccurredAt    *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=occurred_at,json=occurredAt,proto3" json:"occurred_at,omitempty"`
+	OccurredAt *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=occurred_at,json=occurredAt,proto3" json:"occurred_at,omitempty"`
+	// 产生这条事件的 agent 进程的 run_id，和 hello 里的一致；agent 重启后会换新。例："0b9e7a52-1c3d-4e8f-a6b7-c8d9e0f1a2b3"
+	RunId string `protobuf:"bytes,7,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	// 这次 agent 进程内的事件序号，从 1 开始递增；agent 只在收到 ack 后删除本地缓存。例：42
+	EventSeq      int64 `protobuf:"varint,8,opt,name=event_seq,json=eventSeq,proto3" json:"event_seq,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1697,6 +1718,20 @@ func (x *ContainerEvent) GetOccurredAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *ContainerEvent) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
+}
+
+func (x *ContainerEvent) GetEventSeq() int64 {
+	if x != nil {
+		return x.EventSeq
+	}
+	return 0
+}
+
 // ReportAck 确认 report 已经写入。
 type ReportAck struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -1752,6 +1787,61 @@ func (x *ReportAck) GetSeq() int64 {
 	return 0
 }
 
+// ContainerEventAck 确认容器事件已经写入。
+type ContainerEventAck struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 已经写入的事件所属的 agent 进程 run_id；和当前 run_id 不一致的 ack，agent 忽略。例："0b9e7a52-1c3d-4e8f-a6b7-c8d9e0f1a2b3"
+	RunId string `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	// 这个 run_id 下已经连续写入的最大事件序号（1..event_seq 都已写入），agent 删除本地缓存里 event_seq 不大于它的事件。例：42
+	EventSeq      int64 `protobuf:"varint,2,opt,name=event_seq,json=eventSeq,proto3" json:"event_seq,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ContainerEventAck) Reset() {
+	*x = ContainerEventAck{}
+	mi := &file_renice_infra_v1_agent_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ContainerEventAck) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ContainerEventAck) ProtoMessage() {}
+
+func (x *ContainerEventAck) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_infra_v1_agent_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ContainerEventAck.ProtoReflect.Descriptor instead.
+func (*ContainerEventAck) Descriptor() ([]byte, []int) {
+	return file_renice_infra_v1_agent_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *ContainerEventAck) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
+}
+
+func (x *ContainerEventAck) GetEventSeq() int64 {
+	if x != nil {
+		return x.EventSeq
+	}
+	return 0
+}
+
 var File_renice_infra_v1_agent_proto protoreflect.FileDescriptor
 
 const file_renice_infra_v1_agent_proto_rawDesc = "" +
@@ -1762,11 +1852,12 @@ const file_renice_infra_v1_agent_proto_rawDesc = "" +
 	"\x06report\x18\x02 \x01(\v2\x17.renice.infra.v1.ReportH\x00R\x06report\x12J\n" +
 	"\x0fcontainer_event\x18\x03 \x01(\v2\x1f.renice.infra.v1.ContainerEventH\x00R\x0econtainerEvent\x128\n" +
 	"\thost_info\x18\x04 \x01(\v2\x19.renice.infra.v1.HostInfoH\x00R\bhostInfoB\t\n" +
-	"\apayload\"\x8f\x01\n" +
+	"\apayload\"\xe5\x01\n" +
 	"\x0fConnectResponse\x124\n" +
 	"\awelcome\x18\x01 \x01(\v2\x18.renice.infra.v1.WelcomeH\x00R\awelcome\x12;\n" +
 	"\n" +
-	"report_ack\x18\x02 \x01(\v2\x1a.renice.infra.v1.ReportAckH\x00R\treportAckB\t\n" +
+	"report_ack\x18\x02 \x01(\v2\x1a.renice.infra.v1.ReportAckH\x00R\treportAck\x12T\n" +
+	"\x13container_event_ack\x18\x03 \x01(\v2\".renice.infra.v1.ContainerEventAckH\x00R\x11containerEventAckB\t\n" +
 	"\apayload\"\xc6\x01\n" +
 	"\x05Hello\x12#\n" +
 	"\ragent_version\x18\x01 \x01(\tR\fagentVersion\x12\x17\n" +
@@ -1874,7 +1965,7 @@ const file_renice_infra_v1_agent_proto_rawDesc = "" +
 	"\x14net_rx_bytes_per_sec\x18\x10 \x01(\x01R\x10netRxBytesPerSec\x12.\n" +
 	"\x14net_tx_bytes_per_sec\x18\x11 \x01(\x01R\x10netTxBytesPerSec\x126\n" +
 	"\x18block_read_bytes_per_sec\x18\x12 \x01(\x01R\x14blockReadBytesPerSec\x128\n" +
-	"\x19block_write_bytes_per_sec\x18\x13 \x01(\x01R\x15blockWriteBytesPerSec\"\xa7\x02\n" +
+	"\x19block_write_bytes_per_sec\x18\x13 \x01(\x01R\x15blockWriteBytesPerSec\"\xdb\x02\n" +
 	"\x0eContainerEvent\x12!\n" +
 	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\x12%\n" +
 	"\x0econtainer_name\x18\x02 \x01(\tR\rcontainerName\x127\n" +
@@ -1882,10 +1973,15 @@ const file_renice_infra_v1_agent_proto_rawDesc = "" +
 	"\texit_code\x18\x04 \x01(\x05R\bexitCode\x128\n" +
 	"\x06health\x18\x05 \x01(\x0e2 .renice.infra.v1.ContainerHealthR\x06health\x12;\n" +
 	"\voccurred_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"occurredAt\"4\n" +
+	"occurredAt\x12\x15\n" +
+	"\x06run_id\x18\a \x01(\tR\x05runId\x12\x1b\n" +
+	"\tevent_seq\x18\b \x01(\x03R\beventSeq\"4\n" +
 	"\tReportAck\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x10\n" +
-	"\x03seq\x18\x02 \x01(\x03R\x03seq*\x83\x01\n" +
+	"\x03seq\x18\x02 \x01(\x03R\x03seq\"G\n" +
+	"\x11ContainerEventAck\x12\x15\n" +
+	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x1b\n" +
+	"\tevent_seq\x18\x02 \x01(\x03R\beventSeq*\x83\x01\n" +
 	"\tAgentRole\x12\x1a\n" +
 	"\x16AGENT_ROLE_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12AGENT_ROLE_BUILDER\x10\x01\x12\x15\n" +
@@ -1932,7 +2028,7 @@ func file_renice_infra_v1_agent_proto_rawDescGZIP() []byte {
 }
 
 var file_renice_infra_v1_agent_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_renice_infra_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_renice_infra_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_renice_infra_v1_agent_proto_goTypes = []any{
 	(AgentRole)(0),                // 0: renice.infra.v1.AgentRole
 	(ContainerState)(0),           // 1: renice.infra.v1.ContainerState
@@ -1952,7 +2048,8 @@ var file_renice_infra_v1_agent_proto_goTypes = []any{
 	(*ContainerMetrics)(nil),      // 15: renice.infra.v1.ContainerMetrics
 	(*ContainerEvent)(nil),        // 16: renice.infra.v1.ContainerEvent
 	(*ReportAck)(nil),             // 17: renice.infra.v1.ReportAck
-	(*timestamppb.Timestamp)(nil), // 18: google.protobuf.Timestamp
+	(*ContainerEventAck)(nil),     // 18: renice.infra.v1.ContainerEventAck
+	(*timestamppb.Timestamp)(nil), // 19: google.protobuf.Timestamp
 }
 var file_renice_infra_v1_agent_proto_depIdxs = []int32{
 	6,  // 0: renice.infra.v1.ConnectRequest.hello:type_name -> renice.infra.v1.Hello
@@ -1961,31 +2058,32 @@ var file_renice_infra_v1_agent_proto_depIdxs = []int32{
 	7,  // 3: renice.infra.v1.ConnectRequest.host_info:type_name -> renice.infra.v1.HostInfo
 	8,  // 4: renice.infra.v1.ConnectResponse.welcome:type_name -> renice.infra.v1.Welcome
 	17, // 5: renice.infra.v1.ConnectResponse.report_ack:type_name -> renice.infra.v1.ReportAck
-	7,  // 6: renice.infra.v1.Hello.host_info:type_name -> renice.infra.v1.HostInfo
-	0,  // 7: renice.infra.v1.Hello.roles:type_name -> renice.infra.v1.AgentRole
-	18, // 8: renice.infra.v1.HostInfo.boot_time:type_name -> google.protobuf.Timestamp
-	18, // 9: renice.infra.v1.Welcome.server_time:type_name -> google.protobuf.Timestamp
-	18, // 10: renice.infra.v1.Report.sampled_at:type_name -> google.protobuf.Timestamp
-	10, // 11: renice.infra.v1.Report.host:type_name -> renice.infra.v1.HostMetrics
-	15, // 12: renice.infra.v1.Report.containers:type_name -> renice.infra.v1.ContainerMetrics
-	11, // 13: renice.infra.v1.HostMetrics.disks:type_name -> renice.infra.v1.DiskUsage
-	12, // 14: renice.infra.v1.HostMetrics.disk_io:type_name -> renice.infra.v1.DiskIO
-	13, // 15: renice.infra.v1.HostMetrics.net:type_name -> renice.infra.v1.NetMetrics
-	14, // 16: renice.infra.v1.HostMetrics.psi:type_name -> renice.infra.v1.Psi
-	1,  // 17: renice.infra.v1.ContainerMetrics.state:type_name -> renice.infra.v1.ContainerState
-	2,  // 18: renice.infra.v1.ContainerMetrics.health:type_name -> renice.infra.v1.ContainerHealth
-	18, // 19: renice.infra.v1.ContainerMetrics.created_at:type_name -> google.protobuf.Timestamp
-	18, // 20: renice.infra.v1.ContainerMetrics.started_at:type_name -> google.protobuf.Timestamp
-	3,  // 21: renice.infra.v1.ContainerEvent.type:type_name -> renice.infra.v1.ContainerEventType
-	2,  // 22: renice.infra.v1.ContainerEvent.health:type_name -> renice.infra.v1.ContainerHealth
-	18, // 23: renice.infra.v1.ContainerEvent.occurred_at:type_name -> google.protobuf.Timestamp
-	4,  // 24: renice.infra.v1.AgentService.Connect:input_type -> renice.infra.v1.ConnectRequest
-	5,  // 25: renice.infra.v1.AgentService.Connect:output_type -> renice.infra.v1.ConnectResponse
-	25, // [25:26] is the sub-list for method output_type
-	24, // [24:25] is the sub-list for method input_type
-	24, // [24:24] is the sub-list for extension type_name
-	24, // [24:24] is the sub-list for extension extendee
-	0,  // [0:24] is the sub-list for field type_name
+	18, // 6: renice.infra.v1.ConnectResponse.container_event_ack:type_name -> renice.infra.v1.ContainerEventAck
+	7,  // 7: renice.infra.v1.Hello.host_info:type_name -> renice.infra.v1.HostInfo
+	0,  // 8: renice.infra.v1.Hello.roles:type_name -> renice.infra.v1.AgentRole
+	19, // 9: renice.infra.v1.HostInfo.boot_time:type_name -> google.protobuf.Timestamp
+	19, // 10: renice.infra.v1.Welcome.server_time:type_name -> google.protobuf.Timestamp
+	19, // 11: renice.infra.v1.Report.sampled_at:type_name -> google.protobuf.Timestamp
+	10, // 12: renice.infra.v1.Report.host:type_name -> renice.infra.v1.HostMetrics
+	15, // 13: renice.infra.v1.Report.containers:type_name -> renice.infra.v1.ContainerMetrics
+	11, // 14: renice.infra.v1.HostMetrics.disks:type_name -> renice.infra.v1.DiskUsage
+	12, // 15: renice.infra.v1.HostMetrics.disk_io:type_name -> renice.infra.v1.DiskIO
+	13, // 16: renice.infra.v1.HostMetrics.net:type_name -> renice.infra.v1.NetMetrics
+	14, // 17: renice.infra.v1.HostMetrics.psi:type_name -> renice.infra.v1.Psi
+	1,  // 18: renice.infra.v1.ContainerMetrics.state:type_name -> renice.infra.v1.ContainerState
+	2,  // 19: renice.infra.v1.ContainerMetrics.health:type_name -> renice.infra.v1.ContainerHealth
+	19, // 20: renice.infra.v1.ContainerMetrics.created_at:type_name -> google.protobuf.Timestamp
+	19, // 21: renice.infra.v1.ContainerMetrics.started_at:type_name -> google.protobuf.Timestamp
+	3,  // 22: renice.infra.v1.ContainerEvent.type:type_name -> renice.infra.v1.ContainerEventType
+	2,  // 23: renice.infra.v1.ContainerEvent.health:type_name -> renice.infra.v1.ContainerHealth
+	19, // 24: renice.infra.v1.ContainerEvent.occurred_at:type_name -> google.protobuf.Timestamp
+	4,  // 25: renice.infra.v1.AgentService.Connect:input_type -> renice.infra.v1.ConnectRequest
+	5,  // 26: renice.infra.v1.AgentService.Connect:output_type -> renice.infra.v1.ConnectResponse
+	26, // [26:27] is the sub-list for method output_type
+	25, // [25:26] is the sub-list for method input_type
+	25, // [25:25] is the sub-list for extension type_name
+	25, // [25:25] is the sub-list for extension extendee
+	0,  // [0:25] is the sub-list for field type_name
 }
 
 func init() { file_renice_infra_v1_agent_proto_init() }
@@ -2002,6 +2100,7 @@ func file_renice_infra_v1_agent_proto_init() {
 	file_renice_infra_v1_agent_proto_msgTypes[1].OneofWrappers = []any{
 		(*ConnectResponse_Welcome)(nil),
 		(*ConnectResponse_ReportAck)(nil),
+		(*ConnectResponse_ContainerEventAck)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -2009,7 +2108,7 @@ func file_renice_infra_v1_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_renice_infra_v1_agent_proto_rawDesc), len(file_renice_infra_v1_agent_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   14,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
