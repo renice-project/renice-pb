@@ -502,7 +502,10 @@ type Hello struct {
 	HostInfo *HostInfo `protobuf:"bytes,3,opt,name=host_info,json=hostInfo,proto3" json:"host_info,omitempty"`
 	// 这台 agent 在本地配置里启用的额外角色。服务端只给启用了对应角色的 agent 派对应的命令。
 	// 例：[AGENT_ROLE_BUILDER, AGENT_ROLE_PROBER, AGENT_ROLE_WATCHDOG]（renice-us-1）
-	Roles         []AgentRole `protobuf:"varint,4,rep,packed,name=roles,proto3,enum=renice.infra.v1.AgentRole" json:"roles,omitempty"`
+	Roles []AgentRole `protobuf:"varint,4,rep,packed,name=roles,proto3,enum=renice.infra.v1.AgentRole" json:"roles,omitempty"`
+	// 这次 agent 进程启动时生成的随机 ID（UUID），进程重启就换一个。report 的 seq 在同一个 run_id 内递增。
+	// 例："0b9e7a52-1c3d-4e8f-a6b7-c8d9e0f1a2b3"
+	RunId         string `protobuf:"bytes,5,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -563,6 +566,13 @@ func (x *Hello) GetRoles() []AgentRole {
 		return x.Roles
 	}
 	return nil
+}
+
+func (x *Hello) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
 }
 
 // HostInfo 是主机的静态信息，很少变化。
@@ -786,16 +796,20 @@ func (x *Welcome) GetServerTime() *timestamppb.Timestamp {
 // Report 是一次定时上报。
 type Report struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// 这条 report 的序号，同一个 boot_id 内从 1 开始严格递增；agent 重启后从 1 重新开始。服务端按 (主机, boot_id, seq) 去重。例：28800
+	// 这条 report 的序号，同一个 run_id 内从 1 开始严格递增；agent 进程重启后（run_id 换新）从 1 重新开始。服务端按 (主机, run_id, seq) 去重。例：28800
 	Seq int64 `protobuf:"varint,1,opt,name=seq,proto3" json:"seq,omitempty"`
 	// 采样结束的时间，指标里的速率都是「上一次采样到这一刻」的平均值。例：2026-10-30T23:05:03+08:00
 	SampledAt *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=sampled_at,json=sampledAt,proto3" json:"sampled_at,omitempty"`
-	// 本次开机的 ID，和 hello 里的一致。补传时用它区分重启前后的 report。例："6f1c2d3e-4b5a-4c7d-9e8f-0a1b2c3d4e5f"
+	// 采样时的开机 ID。机器重启但 agent 缓存没丢的情况不存在（缓存只在内存里），
+	// 采样时的开机 ID。服务端用它判断 rx/tx_bytes_total 这组累计计数器属于哪一次开机，开机 ID 变了就从 0 重新累加。
+	// 例："6f1c2d3e-4b5a-4c7d-9e8f-0a1b2c3d4e5f"
 	BootId string `protobuf:"bytes,3,opt,name=boot_id,json=bootId,proto3" json:"boot_id,omitempty"`
 	// 主机指标。
 	Host *HostMetrics `protobuf:"bytes,4,opt,name=host,proto3" json:"host,omitempty"`
 	// 机器上的全部容器（包括已停止的），docker_available 为 false 时为空。
-	Containers    []*ContainerMetrics `protobuf:"bytes,5,rep,name=containers,proto3" json:"containers,omitempty"`
+	Containers []*ContainerMetrics `protobuf:"bytes,5,rep,name=containers,proto3" json:"containers,omitempty"`
+	// 产生这条 report 的 agent 进程的 run_id，和 hello 里的一致。例："0b9e7a52-1c3d-4e8f-a6b7-c8d9e0f1a2b3"
+	RunId         string `protobuf:"bytes,6,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -863,6 +877,13 @@ func (x *Report) GetContainers() []*ContainerMetrics {
 		return x.Containers
 	}
 	return nil
+}
+
+func (x *Report) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
 }
 
 // HostMetrics 是一次上报里的主机指标。速率是两次上报之间的平均值，峰值是这段时间里每秒采样的最大值。
@@ -1680,9 +1701,9 @@ func (x *ContainerEvent) GetOccurredAt() *timestamppb.Timestamp {
 // ReportAck 确认 report 已经写入。
 type ReportAck struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// 已经写入的 report 所属的开机 ID。例："6f1c2d3e-4b5a-4c7d-9e8f-0a1b2c3d4e5f"
-	BootId string `protobuf:"bytes,1,opt,name=boot_id,json=bootId,proto3" json:"boot_id,omitempty"`
-	// 这个 boot_id 下已经写入的最大 seq，agent 删掉本地缓存里 seq 不大于它的 report。例：28800
+	// 已经写入的 report 所属的 agent 进程 run_id。和当前 run_id 不一致的 ack，agent 忽略。例："0b9e7a52-1c3d-4e8f-a6b7-c8d9e0f1a2b3"
+	RunId string `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	// 这个 run_id 下已经连续写入的最大 seq（1..seq 都已写入），agent 删掉本地缓存里 seq 不大于它的 report。例：28800
 	Seq           int64 `protobuf:"varint,2,opt,name=seq,proto3" json:"seq,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1718,9 +1739,9 @@ func (*ReportAck) Descriptor() ([]byte, []int) {
 	return file_renice_infra_v1_agent_proto_rawDescGZIP(), []int{13}
 }
 
-func (x *ReportAck) GetBootId() string {
+func (x *ReportAck) GetRunId() string {
 	if x != nil {
-		return x.BootId
+		return x.RunId
 	}
 	return ""
 }
@@ -1747,12 +1768,13 @@ const file_renice_infra_v1_agent_proto_rawDesc = "" +
 	"\awelcome\x18\x01 \x01(\v2\x18.renice.infra.v1.WelcomeH\x00R\awelcome\x12;\n" +
 	"\n" +
 	"report_ack\x18\x02 \x01(\v2\x1a.renice.infra.v1.ReportAckH\x00R\treportAckB\t\n" +
-	"\apayload\"\xaf\x01\n" +
+	"\apayload\"\xc6\x01\n" +
 	"\x05Hello\x12#\n" +
 	"\ragent_version\x18\x01 \x01(\tR\fagentVersion\x12\x17\n" +
 	"\aboot_id\x18\x02 \x01(\tR\x06bootId\x126\n" +
 	"\thost_info\x18\x03 \x01(\v2\x19.renice.infra.v1.HostInfoR\bhostInfo\x120\n" +
-	"\x05roles\x18\x04 \x03(\x0e2\x1a.renice.infra.v1.AgentRoleR\x05roles\"\xc6\x03\n" +
+	"\x05roles\x18\x04 \x03(\x0e2\x1a.renice.infra.v1.AgentRoleR\x05roles\x12\x15\n" +
+	"\x06run_id\x18\x05 \x01(\tR\x05runId\"\xc6\x03\n" +
 	"\bHostInfo\x12\x1a\n" +
 	"\bhostname\x18\x01 \x01(\tR\bhostname\x12\x0e\n" +
 	"\x02os\x18\x02 \x01(\tR\x02os\x12\x16\n" +
@@ -1772,7 +1794,7 @@ const file_renice_infra_v1_agent_proto_rawDesc = "" +
 	"\ahost_id\x18\x01 \x01(\x03R\x06hostId\x126\n" +
 	"\x17report_interval_seconds\x18\x02 \x01(\x05R\x15reportIntervalSeconds\x12;\n" +
 	"\vserver_time\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"serverTime\"\xe3\x01\n" +
+	"serverTime\"\xfa\x01\n" +
 	"\x06Report\x12\x10\n" +
 	"\x03seq\x18\x01 \x01(\x03R\x03seq\x129\n" +
 	"\n" +
@@ -1781,7 +1803,8 @@ const file_renice_infra_v1_agent_proto_rawDesc = "" +
 	"\x04host\x18\x04 \x01(\v2\x1c.renice.infra.v1.HostMetricsR\x04host\x12A\n" +
 	"\n" +
 	"containers\x18\x05 \x03(\v2!.renice.infra.v1.ContainerMetricsR\n" +
-	"containers\"\xaf\x04\n" +
+	"containers\x12\x15\n" +
+	"\x06run_id\x18\x06 \x01(\tR\x05runId\"\xaf\x04\n" +
 	"\vHostMetrics\x12\x1f\n" +
 	"\vcpu_percent\x18\x01 \x01(\x01R\n" +
 	"cpuPercent\x12,\n" +
@@ -1860,9 +1883,9 @@ const file_renice_infra_v1_agent_proto_rawDesc = "" +
 	"\texit_code\x18\x04 \x01(\x05R\bexitCode\x128\n" +
 	"\x06health\x18\x05 \x01(\x0e2 .renice.infra.v1.ContainerHealthR\x06health\x12;\n" +
 	"\voccurred_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"occurredAt\"6\n" +
-	"\tReportAck\x12\x17\n" +
-	"\aboot_id\x18\x01 \x01(\tR\x06bootId\x12\x10\n" +
+	"occurredAt\"4\n" +
+	"\tReportAck\x12\x15\n" +
+	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x10\n" +
 	"\x03seq\x18\x02 \x01(\x03R\x03seq*\x83\x01\n" +
 	"\tAgentRole\x12\x1a\n" +
 	"\x16AGENT_ROLE_UNSPECIFIED\x10\x00\x12\x16\n" +

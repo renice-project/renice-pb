@@ -44,7 +44,8 @@ type AgentServiceClient interface {
 	// 5. 连接期间 token 被吊销 → 服务端以 UNAUTHENTICATED 关闭流。
 	//
 	// 断线与补传：agent 把还没收到 report_ack 的 report 留在本地，最多保留 10 分钟，超出的丢弃。
-	// 重连后按 seq 从小到大补发，服务端按 (主机, boot_id, seq) 去重，所以重复补发是安全的。
+	// 重连后按 seq 从小到大补发，服务端按 (主机, run_id, seq) 去重，所以重复补发是安全的。
+	// agent 进程重启后本地缓存随之丢失，run_id 也会换新，seq 从 1 重新开始，不会被误判成重复。
 	//
 	// 业务例子：renice-us-1 上的 agent 开机后连上 agent.health.renice.cc:443，发 hello，
 	// 收到 welcome（host_id=3，每 3 秒上报一次），之后每 3 秒发一条 report，服务端写进 VictoriaMetrics 后回 report_ack。
@@ -94,7 +95,8 @@ type AgentServiceServer interface {
 	// 5. 连接期间 token 被吊销 → 服务端以 UNAUTHENTICATED 关闭流。
 	//
 	// 断线与补传：agent 把还没收到 report_ack 的 report 留在本地，最多保留 10 分钟，超出的丢弃。
-	// 重连后按 seq 从小到大补发，服务端按 (主机, boot_id, seq) 去重，所以重复补发是安全的。
+	// 重连后按 seq 从小到大补发，服务端按 (主机, run_id, seq) 去重，所以重复补发是安全的。
+	// agent 进程重启后本地缓存随之丢失，run_id 也会换新，seq 从 1 重新开始，不会被误判成重复。
 	//
 	// 业务例子：renice-us-1 上的 agent 开机后连上 agent.health.renice.cc:443，发 hello，
 	// 收到 welcome（host_id=3，每 3 秒上报一次），之后每 3 秒发一条 report，服务端写进 VictoriaMetrics 后回 report_ack。
