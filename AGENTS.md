@@ -28,8 +28,8 @@ renice-pb/
 ## 3. 版本
 
 - 包名里的 `v1`、`v2` 是**接口版本**，只在有破坏性改动时升：新建 `proto/renice/<服务>/v2/`，v1 原样保留，两个版本并存，直到所有调用方迁完再删 v1。
-- 仓库的 git tag（`v0.1.0` …）是**发布版本**，用 semver：加了新接口升 MINOR，只改注释或修生成问题升 PATCH。各服务在 `go.mod` 里钉这个 tag。
-- 一个 tag 可以同时包含 `sso/v1` 和 `sso/v2`，两套版本不冲突。
+- **仓库本身不发版本、不打 tag**（ice 2026-10-30 定）：各服务在 `go.mod` 里直接钉 main 上的某个提交（Go 会写成 pseudo-version，例 `v0.2.1-0.20261030123000-c436c3c1a2b4`）。原因：每个服务改一次接口就要发一版 pb，版本号会多到没有意义；go.mod 里的提交哈希已经足够确定。历史上的 `v0.1.0`、`v0.2.0` 两个 tag 保留，不再新增。
+- 一个提交可以同时包含 `sso/v1` 和 `sso/v2`，两套版本不冲突。
 
 ## 4. 改一个接口的步骤
 
@@ -37,8 +37,8 @@ renice-pb/
 2. 运行 `scripts/gen.sh`，预期最后一行输出 `生成完成`。
 3. `git diff` 看一遍 proto 和生成的代码。
 4. 在 `CHANGELOG.md` 的「未发布」下写一行。
-5. 用户要求提交时再提交；发布时由用户决定打哪个 tag。
-6. 回到调用方和被调方仓库：`go get github.com/renice-project/renice-pb@<tag>`。
+5. 用户要求提交时再提交，合进 main 即生效，不打 tag。
+6. 回到调用方和被调方仓库：`go get github.com/renice-project/renice-pb@main`（或 `@<提交哈希>`），提交 go.mod / go.sum。
 
 ## 5. 命名约定
 

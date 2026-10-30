@@ -6,12 +6,12 @@ renice 系列服务之间的 gRPC 契约：`.proto` 加上生成好的 Go 代码
 
 | 服务 | 包 | 说明 |
 |---|---|---|
-| renice-sso | `renice.sso.v1` | `SSOService.ExchangeCode`：各服务后端用登录回调里的一次性 code 换出用户身份 |
+| renice-sso | `renice.sso.v1` | `SSOService.ExchangeCode`：各服务后端用登录回调里的一次性 code 换出用户身份；`GrantApp` / `RevokeApp` / `ListGrants`：服务告诉 SSO 谁能在启动台看到自己 |
 
 ## 怎么用
 
 ```bash
-go get github.com/renice-project/renice-pb@latest
+go get github.com/renice-project/renice-pb@main   # 不打 tag，钉 main 上的提交
 ```
 
 ```go

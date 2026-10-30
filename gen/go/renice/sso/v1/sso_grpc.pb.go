@@ -85,7 +85,8 @@ type SSOServiceClient interface {
 	// 鉴权与 GrantApp 相同，只能看到自己的授权：
 	//
 	// 1. client_id 不存在、客户端已停用，或者 client_secret 不对 → UNAUTHENTICATED。
-	// 2. page_size 小于 0 或大于 1000、page_token 不是上一页返回的值 → INVALID_ARGUMENT。
+	// 2. page_size 小于 0 或大于 1000、page_token 不是规范的正整数十进制串（例如 "abc"、"0"、"007"）→ INVALID_ARGUMENT。
+	//    page_token 就是一个 user_id 游标，传自己编的值不会越权，只会从那个 user_id 之后开始列。
 	//
 	// 业务例子：renice-infra 每 10 分钟调一次，翻完所有页，和自己的 admin 列表对一遍。
 	ListGrants(ctx context.Context, in *ListGrantsRequest, opts ...grpc.CallOption) (*ListGrantsResponse, error)
@@ -199,7 +200,8 @@ type SSOServiceServer interface {
 	// 鉴权与 GrantApp 相同，只能看到自己的授权：
 	//
 	// 1. client_id 不存在、客户端已停用，或者 client_secret 不对 → UNAUTHENTICATED。
-	// 2. page_size 小于 0 或大于 1000、page_token 不是上一页返回的值 → INVALID_ARGUMENT。
+	// 2. page_size 小于 0 或大于 1000、page_token 不是规范的正整数十进制串（例如 "abc"、"0"、"007"）→ INVALID_ARGUMENT。
+	//    page_token 就是一个 user_id 游标，传自己编的值不会越权，只会从那个 user_id 之后开始列。
 	//
 	// 业务例子：renice-infra 每 10 分钟调一次，翻完所有页，和自己的 admin 列表对一遍。
 	ListGrants(context.Context, *ListGrantsRequest) (*ListGrantsResponse, error)
