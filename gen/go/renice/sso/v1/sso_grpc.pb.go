@@ -77,6 +77,11 @@ type SSOServiceClient interface {
 	// ListGrants 按 user_id 从小到大分页列出调用方自己的全部授权，给调用方对账用：
 	// 拿它和自己的权限表比一遍，少了的补 GrantApp，多了的补 RevokeApp。
 	//
+	// 分页不是快照：page_token 是上一页最后一个 user_id，下一页只取比它大的。翻页期间新增、撤销的授权，
+	// 可能出现也可能不出现在这次结果里。这对对账是安全的，因为调用方的授权只有调用方自己能改，
+	// 翻页期间的变化都是调用方自己刚做的；对账按自己的权限表补 GrantApp / RevokeApp，两者都幂等，
+	// 多补一次不会出错。漏掉的变化会在下一轮对账里对上。
+	//
 	// 鉴权与 GrantApp 相同，只能看到自己的授权：
 	//
 	// 1. client_id 不存在、客户端已停用，或者 client_secret 不对 → UNAUTHENTICATED。
@@ -185,6 +190,11 @@ type SSOServiceServer interface {
 	RevokeApp(context.Context, *RevokeAppRequest) (*RevokeAppResponse, error)
 	// ListGrants 按 user_id 从小到大分页列出调用方自己的全部授权，给调用方对账用：
 	// 拿它和自己的权限表比一遍，少了的补 GrantApp，多了的补 RevokeApp。
+	//
+	// 分页不是快照：page_token 是上一页最后一个 user_id，下一页只取比它大的。翻页期间新增、撤销的授权，
+	// 可能出现也可能不出现在这次结果里。这对对账是安全的，因为调用方的授权只有调用方自己能改，
+	// 翻页期间的变化都是调用方自己刚做的；对账按自己的权限表补 GrantApp / RevokeApp，两者都幂等，
+	// 多补一次不会出错。漏掉的变化会在下一轮对账里对上。
 	//
 	// 鉴权与 GrantApp 相同，只能看到自己的授权：
 	//

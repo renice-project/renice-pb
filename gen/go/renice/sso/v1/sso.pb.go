@@ -537,7 +537,7 @@ func (x *ListGrantsRequest) GetPageToken() string {
 // ListGrantsResponse 是 ListGrants 的出参。
 type ListGrantsResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// 这一页的授权，按 user_id 从小到大。
+	// 这一页的授权，按 user_id 从小到大；没有授权时是空列表。例：[{user_id: 10004, granted_at: 2026-10-30T20:10:00+08:00}]
 	Grants []*Grant `protobuf:"bytes,1,rep,name=grants,proto3" json:"grants,omitempty"`
 	// 下一页的 token；为空字符串表示已经是最后一页。例："10004"
 	NextPageToken string `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
