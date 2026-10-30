@@ -37,16 +37,30 @@ type AgentServiceClient interface {
 	// 握手与错误码：
 	// 1. 没带 token、token 不存在或已吊销 → UNAUTHENTICATED，流立即关闭。agent 应该停止重连并报错退出，
 	//    因为换不来新结果（运维要重新执行安装命令）。
-	// 2. agent 发的第一条消息必须是 hello，否则 → FAILED_PRECONDITION。agent 将这类错误视为当前
-	//    agent 实现或配置错误，记录服务端返回的中文错误并停止当前流的自动重连，需修复或升级后再启动。
+	// 2. agent 发的第一条消息必须是 hello，否则 → FAILED_PRECONDITION。
 	// 3. 握手成功后服务端回一条 welcome，之后 agent 每 report_interval_seconds 秒发一条 report。
 	// 4. 同一台主机建立了新连接时，旧连接被服务端以 ABORTED「同一台主机建立了新连接」关闭。
 	//    这通常是 agent 重启后旧连接还没超时，agent 不需要做什么。
 	// 5. 连接期间 token 被吊销 → 服务端以 UNAUTHENTICATED 关闭流。
 	//
-	// 断线与补传：agent 把还没收到 report_ack 的 report 和还没收到 container_event_ack 的事件写入本机持久化队列，最多保留 10 分钟，超出的丢弃。队列、run_id 和各自序号必须在发送前持久化，收到 ack 后再持久化删除；进程重启或机器重启后先恢复队列，再按 report.seq 和 container_event.event_seq 从小到大补发。持久化状态仍在时 run_id 不因进程或机器重启而改变，序号继续递增。
-	// 服务端按 (主机, run_id, seq) 去重 report，按 (主机, run_id, event_seq) 去重事件，所以重复补发是安全的：
-	// 服务端已处理但 ack 丢失时会再次收到并返回相同确认；服务端尚未处理时会正常处理；重复补发只会被确认而不会重复落库。只有持久化数据目录丢失或损坏时，未确认队列无法恢复；agent 必须记录数据丢失告警并创建新的 run_id，不能伪装成已补传。
+	// 断线与补传（只针对 report）：
+	// - agent 把还没被确认的 report 放在内存里，最多保留最近 10 分钟（按 3 秒一条约 200 条），更早的直接丢弃，
+	//   平台的曲线上那一段显示为缺口。缓存只在内存里：agent 进程重启后缓存丢失，run_id 换新，seq 从 1 重新开始。
+	//   这是有意的取舍：进程重启很少见，丢几分钟监控数据可以接受，不值得为此在机器上落盘。
+	// - 重连后 agent 按 seq 从小到大补发缓存里的 report，然后继续发新的。
+	// - 服务端在一条流上按收到的顺序逐条处理。每处理完一条（写入成功，或者判定为重复）就回一条 report_ack，带上这条的 seq。
+	//   因为同一条流上的消息有序，ack 了 seq=N 就表示这条流上 N 之前送达的 report 也都处理完了，agent 删掉缓存里 seq ≤ N 的。
+	//   agent 自己丢弃的旧 report 不会造成「等不到」的空洞：ack 不要求序号连续。
+	// - 服务端写入失败（例如 VictoriaMetrics 暂时不可用）时不回 ack，而是以 UNAVAILABLE 关闭流；agent 按退避重连后补发。
+	// - 服务端按 (主机, run_id, seq) 去重：记下每个 run_id 已处理的最大 seq，seq 不大于它的 report 直接 ack、不再写入。
+	//   所以「服务端已经写入但 ack 在路上丢了」时重复补发是安全的。
+	//
+	// 容器事件不补传：container_event 只是为了让状态变化比下一次 report 早几秒被看到，丢了也没关系，
+	// 容器的真实状态以 report 里的 containers 为准（OOM 也能从 ContainerMetrics.oom_killed 看出来）。
+	//
+	// agent 收到错误码后怎么做：UNAUTHENTICATED、FAILED_PRECONDITION 是配置或实现问题，重连也不会好，agent 打印服务端给的中文错误后
+	// 以退出码 78 退出（systemd 单元里配 RestartPreventExitStatus=78，不会无限重启）；ABORTED、UNAVAILABLE 以及网络断开都按
+	// 1 秒起步、翻倍、最长 60 秒的退避重连。
 	//
 	// 业务例子：renice-us-1 上的 agent 开机后连上 agent.health.renice.cc:443，发 hello，
 	// 收到 welcome（host_id=3，每 3 秒上报一次），之后每 3 秒发一条 report，服务端写进 VictoriaMetrics 后回 report_ack。
@@ -89,16 +103,30 @@ type AgentServiceServer interface {
 	// 握手与错误码：
 	// 1. 没带 token、token 不存在或已吊销 → UNAUTHENTICATED，流立即关闭。agent 应该停止重连并报错退出，
 	//    因为换不来新结果（运维要重新执行安装命令）。
-	// 2. agent 发的第一条消息必须是 hello，否则 → FAILED_PRECONDITION。agent 将这类错误视为当前
-	//    agent 实现或配置错误，记录服务端返回的中文错误并停止当前流的自动重连，需修复或升级后再启动。
+	// 2. agent 发的第一条消息必须是 hello，否则 → FAILED_PRECONDITION。
 	// 3. 握手成功后服务端回一条 welcome，之后 agent 每 report_interval_seconds 秒发一条 report。
 	// 4. 同一台主机建立了新连接时，旧连接被服务端以 ABORTED「同一台主机建立了新连接」关闭。
 	//    这通常是 agent 重启后旧连接还没超时，agent 不需要做什么。
 	// 5. 连接期间 token 被吊销 → 服务端以 UNAUTHENTICATED 关闭流。
 	//
-	// 断线与补传：agent 把还没收到 report_ack 的 report 和还没收到 container_event_ack 的事件写入本机持久化队列，最多保留 10 分钟，超出的丢弃。队列、run_id 和各自序号必须在发送前持久化，收到 ack 后再持久化删除；进程重启或机器重启后先恢复队列，再按 report.seq 和 container_event.event_seq 从小到大补发。持久化状态仍在时 run_id 不因进程或机器重启而改变，序号继续递增。
-	// 服务端按 (主机, run_id, seq) 去重 report，按 (主机, run_id, event_seq) 去重事件，所以重复补发是安全的：
-	// 服务端已处理但 ack 丢失时会再次收到并返回相同确认；服务端尚未处理时会正常处理；重复补发只会被确认而不会重复落库。只有持久化数据目录丢失或损坏时，未确认队列无法恢复；agent 必须记录数据丢失告警并创建新的 run_id，不能伪装成已补传。
+	// 断线与补传（只针对 report）：
+	// - agent 把还没被确认的 report 放在内存里，最多保留最近 10 分钟（按 3 秒一条约 200 条），更早的直接丢弃，
+	//   平台的曲线上那一段显示为缺口。缓存只在内存里：agent 进程重启后缓存丢失，run_id 换新，seq 从 1 重新开始。
+	//   这是有意的取舍：进程重启很少见，丢几分钟监控数据可以接受，不值得为此在机器上落盘。
+	// - 重连后 agent 按 seq 从小到大补发缓存里的 report，然后继续发新的。
+	// - 服务端在一条流上按收到的顺序逐条处理。每处理完一条（写入成功，或者判定为重复）就回一条 report_ack，带上这条的 seq。
+	//   因为同一条流上的消息有序，ack 了 seq=N 就表示这条流上 N 之前送达的 report 也都处理完了，agent 删掉缓存里 seq ≤ N 的。
+	//   agent 自己丢弃的旧 report 不会造成「等不到」的空洞：ack 不要求序号连续。
+	// - 服务端写入失败（例如 VictoriaMetrics 暂时不可用）时不回 ack，而是以 UNAVAILABLE 关闭流；agent 按退避重连后补发。
+	// - 服务端按 (主机, run_id, seq) 去重：记下每个 run_id 已处理的最大 seq，seq 不大于它的 report 直接 ack、不再写入。
+	//   所以「服务端已经写入但 ack 在路上丢了」时重复补发是安全的。
+	//
+	// 容器事件不补传：container_event 只是为了让状态变化比下一次 report 早几秒被看到，丢了也没关系，
+	// 容器的真实状态以 report 里的 containers 为准（OOM 也能从 ContainerMetrics.oom_killed 看出来）。
+	//
+	// agent 收到错误码后怎么做：UNAUTHENTICATED、FAILED_PRECONDITION 是配置或实现问题，重连也不会好，agent 打印服务端给的中文错误后
+	// 以退出码 78 退出（systemd 单元里配 RestartPreventExitStatus=78，不会无限重启）；ABORTED、UNAVAILABLE 以及网络断开都按
+	// 1 秒起步、翻倍、最长 60 秒的退避重连。
 	//
 	// 业务例子：renice-us-1 上的 agent 开机后连上 agent.health.renice.cc:443，发 hello，
 	// 收到 welcome（host_id=3，每 3 秒上报一次），之后每 3 秒发一条 report，服务端写进 VictoriaMetrics 后回 report_ack。
