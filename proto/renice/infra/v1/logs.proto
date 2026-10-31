@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package renice.infra.v1;
+
+// LogTail 是服务端按页面需求下发的容器日志命令，不需要额外角色。
+// 默认超时：follow=true 不限时；follow=false 读取完最近的日志即结束，不设置额外总时限。
+// 输出走 CommandOutput，stdout/stderr 分开标记；agent 本地不存任何日志。
+// 容器不存在 → FAILED「容器不存在」；follow 时容器退出 → OK；页面关闭时服务端发 CancelCommand。
+message LogTail {
+  // 容器名，不带前导斜杠。例："renice-sso-server"
+  string container = 1;
+  // 最近多少行，0 表示默认 200，最大 2000，超过按 2000。例：200
+  int32 tail_lines = 2;
+  // 是否持续跟随，true 时直到取消或容器退出。例：true
+  bool follow = 3;
+}

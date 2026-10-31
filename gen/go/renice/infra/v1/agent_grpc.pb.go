@@ -62,6 +62,18 @@ type AgentServiceClient interface {
 	// 以退出码 78 退出（systemd 单元里配 RestartPreventExitStatus=78，不会无限重启）；ABORTED、UNAVAILABLE 以及网络断开都按
 	// 1 秒起步、翻倍、最长 60 秒的退避重连。
 	//
+	// 命令通道（welcome 之后才下发）：
+	// - agent **不做**：执行任意 shell 命令、管理文件、改 nginx 或防火墙、自动升级。服务端只能下发白名单里的命令类型，agent 收到白名单以外的命令直接拒绝。
+	// - agent 只执行 Command.kind 中认识的命令；空 oneof 或新服务端发来的未知类型 → REJECTED「agent 版本不支持这条命令」。
+	// - 构建只派给开启 BUILDER 的 agent，解析只派给 DNS，HTTP/TCP 探测只派给 PROBER；agent 也自检。
+	//   命令角色不符 → REJECTED「本机没有开启 xx 角色」；探测不是命令，角色不符通过失败 ProbeResult 回报。
+	//   日志、发布、中间件探测不需要额外角色。不同命令可并发，但最多一个构建，同一 compose 目录最多一个发布。
+	// - 命令、命令输出、结果都不补传。断线时 agent 停掉本连接收到的全部命令（包括日志 follow 和构建），不回结果；
+	//   服务端将这些命令标记为失败「agent 断线」。发布若已开始 docker compose up 则继续跑完，结果丢弃，详见 Deploy。
+	// - 密码和 token 只在内存中使用，不写磁盘、不打日志、不出现在 CommandOutput 或错误消息中。
+	// - 服务端在 welcome 之后立刻发一次 ProbeSync，任务变化时再发全量；agent 整体替换本地任务表。
+	//   探测结果断线期间直接丢弃、不补传，uptime 只按有结果的探测计算。
+	//
 	// 业务例子：renice-us-1 上的 agent 开机后连上 agent.health.renice.cc:443，发 hello，
 	// 收到 welcome（host_id=3，每 3 秒上报一次），之后每 3 秒发一条 report，服务端写进 VictoriaMetrics 后回 report_ack。
 	Connect(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ConnectRequest, ConnectResponse], error)
@@ -127,6 +139,18 @@ type AgentServiceServer interface {
 	// agent 收到错误码后怎么做：UNAUTHENTICATED、FAILED_PRECONDITION 是配置或实现问题，重连也不会好，agent 打印服务端给的中文错误后
 	// 以退出码 78 退出（systemd 单元里配 RestartPreventExitStatus=78，不会无限重启）；ABORTED、UNAVAILABLE 以及网络断开都按
 	// 1 秒起步、翻倍、最长 60 秒的退避重连。
+	//
+	// 命令通道（welcome 之后才下发）：
+	// - agent **不做**：执行任意 shell 命令、管理文件、改 nginx 或防火墙、自动升级。服务端只能下发白名单里的命令类型，agent 收到白名单以外的命令直接拒绝。
+	// - agent 只执行 Command.kind 中认识的命令；空 oneof 或新服务端发来的未知类型 → REJECTED「agent 版本不支持这条命令」。
+	// - 构建只派给开启 BUILDER 的 agent，解析只派给 DNS，HTTP/TCP 探测只派给 PROBER；agent 也自检。
+	//   命令角色不符 → REJECTED「本机没有开启 xx 角色」；探测不是命令，角色不符通过失败 ProbeResult 回报。
+	//   日志、发布、中间件探测不需要额外角色。不同命令可并发，但最多一个构建，同一 compose 目录最多一个发布。
+	// - 命令、命令输出、结果都不补传。断线时 agent 停掉本连接收到的全部命令（包括日志 follow 和构建），不回结果；
+	//   服务端将这些命令标记为失败「agent 断线」。发布若已开始 docker compose up 则继续跑完，结果丢弃，详见 Deploy。
+	// - 密码和 token 只在内存中使用，不写磁盘、不打日志、不出现在 CommandOutput 或错误消息中。
+	// - 服务端在 welcome 之后立刻发一次 ProbeSync，任务变化时再发全量；agent 整体替换本地任务表。
+	//   探测结果断线期间直接丢弃、不补传，uptime 只按有结果的探测计算。
 	//
 	// 业务例子：renice-us-1 上的 agent 开机后连上 agent.health.renice.cc:443，发 hello，
 	// 收到 welcome（host_id=3，每 3 秒上报一次），之后每 3 秒发一条 report，服务端写进 VictoriaMetrics 后回 report_ack。

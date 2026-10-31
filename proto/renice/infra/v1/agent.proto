@@ -3,6 +3,12 @@ syntax = "proto3";
 package renice.infra.v1;
 
 import "google/protobuf/timestamp.proto";
+import "renice/infra/v1/build.proto";
+import "renice/infra/v1/common.proto";
+import "renice/infra/v1/deploy.proto";
+import "renice/infra/v1/dns.proto";
+import "renice/infra/v1/logs.proto";
+import "renice/infra/v1/probe.proto";
 
 // AgentService 是 renice-infra（服务治理平台）的服务端给各台机器上的 renice-agent 用的接口。
 // 只有 agent 主动连服务端，服务端从不连 agent：机器上不开任何入站端口，所有命令都顺着 agent 建立的这条流下发。
@@ -40,6 +46,18 @@ service AgentService {
   // 以退出码 78 退出（systemd 单元里配 RestartPreventExitStatus=78，不会无限重启）；ABORTED、UNAVAILABLE 以及网络断开都按
   // 1 秒起步、翻倍、最长 60 秒的退避重连。
   //
+  // 命令通道（welcome 之后才下发）：
+  // - agent **不做**：执行任意 shell 命令、管理文件、改 nginx 或防火墙、自动升级。服务端只能下发白名单里的命令类型，agent 收到白名单以外的命令直接拒绝。
+  // - agent 只执行 Command.kind 中认识的命令；空 oneof 或新服务端发来的未知类型 → REJECTED「agent 版本不支持这条命令」。
+  // - 构建只派给开启 BUILDER 的 agent，解析只派给 DNS，HTTP/TCP 探测只派给 PROBER；agent 也自检。
+  //   命令角色不符 → REJECTED「本机没有开启 xx 角色」；探测不是命令，角色不符通过失败 ProbeResult 回报。
+  //   日志、发布、中间件探测不需要额外角色。不同命令可并发，但最多一个构建，同一 compose 目录最多一个发布。
+  // - 命令、命令输出、结果都不补传。断线时 agent 停掉本连接收到的全部命令（包括日志 follow 和构建），不回结果；
+  //   服务端将这些命令标记为失败「agent 断线」。发布若已开始 docker compose up 则继续跑完，结果丢弃，详见 Deploy。
+  // - 密码和 token 只在内存中使用，不写磁盘、不打日志、不出现在 CommandOutput 或错误消息中。
+  // - 服务端在 welcome 之后立刻发一次 ProbeSync，任务变化时再发全量；agent 整体替换本地任务表。
+  //   探测结果断线期间直接丢弃、不补传，uptime 只按有结果的探测计算。
+  //
   // 业务例子：renice-us-1 上的 agent 开机后连上 agent.health.renice.cc:443，发 hello，
   // 收到 welcome（host_id=3，每 3 秒上报一次），之后每 3 秒发一条 report，服务端写进 VictoriaMetrics 后回 report_ack。
   rpc Connect(stream ConnectRequest) returns (stream ConnectResponse);
@@ -57,6 +75,12 @@ message ConnectRequest {
     ContainerEvent container_event = 3;
     // 主机静态信息有变化时（或每小时一次）重新上报，例如加了一块盘、内核升级后重启。
     HostInfo host_info = 4;
+    // 命令最终结果，正常连接内每条命令恰好一条；断线例外不回传。例：{id: "550e8400-e29b-41d4-a716-446655440000", status: COMMAND_STATUS_OK}
+    CommandResult command_result = 10;
+    // 命令执行中的批量输出。例：{id: "550e8400-e29b-41d4-a716-446655440000", seq: 1, lines: [{text: "正在拉取镜像"}]}
+    CommandOutput command_output = 11;
+    // 一秒内完成的探测结果批次。例：{results: [{task_id: "mw-3", ok: true}]}
+    ProbeResults probe_results = 12;
   }
 }
 
@@ -68,6 +92,12 @@ message ConnectResponse {
     Welcome welcome = 1;
     // 确认某条 report 已经处理完，agent 从缓存里删掉 seq 不大于它的 report。
     ReportAck report_ack = 2;
+    // 下发一条白名单命令。例：{id: "550e8400-e29b-41d4-a716-446655440000", log_tail: {container: "renice-sso-server", follow: true}}
+    Command command = 10;
+    // 取消一条仍在运行的命令，已结束则忽略。例：{id: "550e8400-e29b-41d4-a716-446655440000"}
+    CancelCommand cancel_command = 11;
+    // 全量探测期望状态，空列表停止全部探测。例：{tasks: [{id: "probe-12", kind: PROBE_KIND_HTTP, interval_seconds: 30, timeout_seconds: 10, http: {url: "https://renice.cc/healthz"}}]}
+    ProbeSync probe_sync = 12;
   }
 }
 
@@ -250,6 +280,8 @@ message Psi {
   double io_some_avg10 = 5;
   // 所有任务都在等 IO 的时间占比。例：0.10
   double io_full_avg10 = 6;
+  // 内核是否提供 CPU full 行；false 时 cpu_full_avg10 的 0 表示不可用，true 时 0 表示确实无压力，不改旧字段语义。例：false
+  bool cpu_full_available = 7;
 }
 
 // ContainerMetrics 是一个容器在这次上报时的状态和资源使用。
@@ -371,4 +403,114 @@ message ReportAck {
   string run_id = 1;
   // 刚处理完的那条 report 的 seq。这条流上在它之前送达的 report 都已处理完，agent 删掉缓存里 seq 不大于它的 report。例：28800
   int64 seq = 2;
+}
+
+// Command 是服务端生成并下发的一条白名单命令，正常连接内每条命令恰好返回一条最终结果。
+// 不同命令可并发；最多一个构建，同一 compose 目录最多一个发布；断线取消与发布例外见 Connect/Deploy。
+// 只执行认识的 kind，空 oneof 或未知类型 → REJECTED「agent 版本不支持这条命令」。
+message Command {
+  // 服务端生成的 UUID，输出与结果都靠它关联。例："550e8400-e29b-41d4-a716-446655440000"
+  string id = 1;
+  // agent 端总超时，单位秒，0 使用类型默认值：日志 follow 不限时、发布 300、构建 1800、解析 30。例：300
+  int32 timeout_seconds = 2;
+  // 命令内容按功能分号段：20–29 日志、30–39 发布、40–49 构建、50–59 解析。
+  // 后续功能在各自号段内加字段，不用 reserved 占号段。
+  oneof kind {
+    // 读取或跟随容器日志。例：{container: "renice-sso-server", tail_lines: 200, follow: true}
+    LogTail log_tail = 20;
+    // 发布一个完整的镜像单元。例：{service: "renice-sso", env: "prod", version: "v0.1.0-alpha.4", compose_dir: "/opt/renice-sso"}
+    Deploy deploy = 30;
+    // 构建并推送发布单元的全部镜像。例：{repo_url: "https://github.com/renice-project/renice-sso.git", commit: "1234567890abcdef1234567890abcdef12345678", version: "1a2b3c4"}
+    Build build = 40;
+    // 列出域名下全部解析。例：{domain: "renice.cc"}
+    DnsList dns_list = 50;
+    // 新增一条 A 记录。例：{domain: "renice.cc", rr: "health", value: "98.142.250.87", ttl: 600}
+    DnsAddA dns_add_a = 51;
+    // 修改一条 A 记录。例：{domain: "renice.cc", record_id: "123456789012345678", rr: "health", value: "98.142.250.87", ttl: 600}
+    DnsSetA dns_set_a = 52;
+    // 删除一条 A 记录。例：{domain: "renice.cc", record_id: "123456789012345678"}
+    DnsDelete dns_delete = 53;
+  }
+}
+
+// CommandResult 是 agent 对命令的一条最终结果，正常连接内恰好一条；断线时不回、不补传。
+// OK 时 error 为空；其他状态必须给出可读的中文原因，不能泄露密码或 token。
+message CommandResult {
+  // 对应 Command.id。例："550e8400-e29b-41d4-a716-446655440000"
+  string id = 1;
+  // 最终状态，未指定不是合法最终结果。例：COMMAND_STATUS_OK
+  CommandStatus status = 2;
+  // 给人看的中文原因，失败、拒绝、取消或超时时必填，须去除凭据。例："已有构建在跑"
+  string error = 3;
+  // 命令结束的时间。例：2026-10-31T16:25:00+08:00
+  google.protobuf.Timestamp finished_at = 4;
+  // 结果按与 Command.kind 相同的功能号段分配：20–29 日志（无 detail）、30–39 发布、40–49 构建、50–59 解析。
+  oneof detail {
+    // 发布结果，包含回滚情况；失败时也可带实际观测结果。例：{previous_version: "v0.1.0-alpha.3", rolled_back: false}
+    DeployResult deploy = 30;
+    // 构建产物及耗时。例：{duration_seconds: 123.5}
+    BuildResult build = 40;
+    // 列出解析的结果，对应 DnsList。例：{records: [{record_id: "123456789012345678", rr: "health", type: "A", value: "98.142.250.87"}]}
+    DnsRecords dns_records = 50;
+    // 新增、修改或删除的结果。例：{record_id: "123456789012345678"}
+    DnsChange dns_change = 51;
+  }
+}
+
+// CommandStatus 是命令的最终状态，业务失败只影响该命令，不关闭 Connect 流。
+enum CommandStatus {
+  // 未指定，不能作为最终结果发送。
+  COMMAND_STATUS_UNSPECIFIED = 0;
+  // 执行成功。
+  COMMAND_STATUS_OK = 1;
+  // 已执行但失败，例如容器不存在、镜像拉取失败或健康检查失败。
+  COMMAND_STATUS_FAILED = 2;
+  // agent 不执行：命令未知、角色未开启或已有互斥任务在跑。
+  COMMAND_STATUS_REJECTED = 3;
+  // 收到 CancelCommand，已停止该命令。
+  COMMAND_STATUS_CANCELED = 4;
+  // 超过 Command 的总时限，已停止该命令。
+  COMMAND_STATUS_TIMEOUT = 5;
+}
+
+// CommandOutput 是命令执行中的一批文本输出；agent 攒最多 200 行或 500ms 就发一批，以先到者为准。
+// 输出不补传，凭据必须先脱敏；最终结果在最后一批输出之后发送。
+message CommandOutput {
+  // 对应 Command.id。例："550e8400-e29b-41d4-a716-446655440000"
+  string id = 1;
+  // 同一命令内批次序号从 1 递增，服务端按它排序去重。例：1
+  int64 seq = 2;
+  // 本批输出，最多 200 行；单行截断规则见 OutputLine。例：[{stream: OUTPUT_STREAM_SYSTEM, text: "正在拉取镜像"}]
+  repeated OutputLine lines = 3;
+}
+
+// CancelCommand 是服务端取消命令的请求，例如关闭日志页面或取消构建。
+// agent 收到后停止命令并回 CANCELED；命令已经结束就忽略，不能再生成第二条最终结果。
+message CancelCommand {
+  // 要取消的 Command.id。例："550e8400-e29b-41d4-a716-446655440000"
+  string id = 1;
+}
+
+// DeployResult 是发布结束时回传的实际状态，包括自保护回滚是否完成。
+// 与 DeployedContainer 放在这里以复用原文件内的 ContainerHealth，避免 agent.proto 与 deploy.proto 循环导入；
+// 保留原枚举的文件位置以通过 FILE 级向后兼容检查。
+message DeployResult {
+  // 发布之前的版本，首次发布没有上一版时为空。例："v0.1.0-alpha.3"
+  string previous_version = 1;
+  // 是否已完成自保护回滚；回滚尝试也失败时为 false，并在 CommandResult.error 说明。例：true
+  bool rolled_back = 2;
+  // 结束时观测到的各服务容器及健康状态；回滚成功时是回滚后的状态。例：[{compose_service: "server", container: "renice-sso-server", health: CONTAINER_HEALTH_HEALTHY, version: "v0.1.0-alpha.3"}]
+  repeated DeployedContainer containers = 3;
+}
+
+// DeployedContainer 是一次发布结束时一个 compose service 的容器状态。
+message DeployedContainer {
+  // compose 服务名。例："server"
+  string compose_service = 1;
+  // 容器名，不带前导斜杠。例："renice-sso-server"
+  string container = 2;
+  // Docker 健康检查状态，复用采集通道的枚举。例：CONTAINER_HEALTH_HEALTHY
+  ContainerHealth health = 3;
+  // 从容器健康检查输出读到的版本；没有取得时为空。例："v0.1.0-alpha.4"
+  string version = 4;
 }
