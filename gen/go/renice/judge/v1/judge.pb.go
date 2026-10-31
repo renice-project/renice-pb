@@ -348,9 +348,11 @@ type HelloRequest struct {
 	// 例：[{code: "cpp23", version: "g++ 14.2.0"}]。
 	Languages []*LanguageInfo `protobuf:"bytes,5,rep,name=languages,proto3" json:"languages,omitempty"`
 	// 本次进程启动的随机 UUID；同次启动的 Hello 重试保持不变，新进程生成新值。例："b912b956-84d4-4534-a87d-559946868812"
-	InstanceId    string `protobuf:"bytes,6,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	InstanceId string `protobuf:"bytes,6,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	// 本机持久化的最近一次成功 session_generation；首次安装填 0，新 instance_id 登记时作为比较并交换的预期值。例：8（服务端当前代次也是 8）
+	ExpectedSessionGeneration int64 `protobuf:"varint,7,opt,name=expected_session_generation,json=expectedSessionGeneration,proto3" json:"expected_session_generation,omitempty"`
+	unknownFields             protoimpl.UnknownFields
+	sizeCache                 protoimpl.SizeCache
 }
 
 func (x *HelloRequest) Reset() {
@@ -423,6 +425,13 @@ func (x *HelloRequest) GetInstanceId() string {
 		return x.InstanceId
 	}
 	return ""
+}
+
+func (x *HelloRequest) GetExpectedSessionGeneration() int64 {
+	if x != nil {
+		return x.ExpectedSessionGeneration
+	}
+	return 0
 }
 
 // HelloResponse 是 Hello 的出参。
@@ -2912,7 +2921,7 @@ var File_renice_judge_v1_judge_proto protoreflect.FileDescriptor
 
 const file_renice_judge_v1_judge_proto_rawDesc = "" +
 	"\n" +
-	"\x1brenice/judge/v1/judge.proto\x12\x0frenice.judge.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xac\x02\n" +
+	"\x1brenice/judge/v1/judge.proto\x12\x0frenice.judge.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xec\x02\n" +
 	"\fHelloRequest\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x126\n" +
 	"\amachine\x18\x02 \x01(\v2\x1c.renice.judge.v1.MachineInfoR\amachine\x12/\n" +
@@ -2921,7 +2930,8 @@ const file_renice_judge_v1_judge_proto_rawDesc = "" +
 	"selfChecks\x12;\n" +
 	"\tlanguages\x18\x05 \x03(\v2\x1d.renice.judge.v1.LanguageInfoR\tlanguages\x12\x1f\n" +
 	"\vinstance_id\x18\x06 \x01(\tR\n" +
-	"instanceId\"\xdc\x02\n" +
+	"instanceId\x12>\n" +
+	"\x1bexpected_session_generation\x18\a \x01(\x03R\x19expectedSessionGeneration\"\xdc\x02\n" +
 	"\rHelloResponse\x12\x1d\n" +
 	"\n" +
 	"machine_id\x18\x01 \x01(\x03R\tmachineId\x125\n" +

@@ -33,10 +33,16 @@ service JudgeService {
   // Hello 是判题机启动后的第一次调用：上报机器信息、各槽位、自检结果和支持的语言，服务端登记后返回每个槽位的 slot_id 和运行参数。
   //
   // 每次进程启动生成一个随机 UUID instance_id，重试 Hello 时保持不变且请求内容相同。
+  // expected_session_generation 是 judgehost 在持久化卷上保存的最近一次成功登记代次；首次登记为 0。
+  // 新 instance_id 仅当该值等于服务端当前代次时才可登记，并原子地将代次加 1；不相等 → FAILED_PRECONDITION「登记代次冲突」，不得自动改值重试。
+  // 同时发出的新旧 Hello 只有一个能以同一预期代次成功，后到者必须失败，不能撤销先登记会话或回收其任务。
+  // 首次发送前须持久化 pending instance_id、预期代次和请求内容；成功响应的 session_generation 必须先持久化再启动心跳和领任务。
+  // 响应丢失或进程崩溃后的同一登记重试沿用全部原值，不得换 instance_id 或自动刷新预期代次。
+  // 持久化卷丢失或服务端数据恢复导致代次不匹配时必须停止并由管理员恢复登记状态，不得降级为 0 或读取较新代次后自动重试。
   // 服务端持久化 (机器, instance_id) 的登记结果和是否已被替代；记录保留到机器被删除。
   // 当前 instance_id 的重试返回原 session_generation 和槽位映射，不回收任务、不增加代次；内容不同 → INVALID_ARGUMENT。
   // 已被替代的 instance_id 再次 Hello → FAILED_PRECONDITION「会话已失效」，不得重新激活。
-  // 从未登记的新 instance_id：在机器级锁内原子增加持久化代次，替换当前会话，只回收旧会话的 leased 任务，
+  // 从未登记的新 instance_id：在机器级锁内比较 expected_session_generation 与当前持久化代次；相等才原子增加代次、替换当前会话并只回收旧会话的 leased 任务，
   // 按 (机器, cpu) 复用 slot_id；此锁也覆盖其他调用的会话校验与写入，避免旧请求越过换代提交。
   // 代次在服务端重启后仍单调递增且不复用；若机器数据重建也必须分配更大的代次。
   // Hello 响应丢失后重试返回同一代次，不能撤销本会话后来领到的任务。
@@ -45,6 +51,7 @@ service JudgeService {
   // - 自检里有 fatal=true 且 ok=false 的项 → FAILED_PRECONDITION，信息里列出没通过的项；judgehost 以退出码 78 退出。
   // - instance_id 不是 UUID、slots 为空、cpu 重复 → INVALID_ARGUMENT。
   //
+  // 验收例：旧进程 A 与新进程 B 的首次 Hello 都带预期代次 8；B 先登记得 9 并领到任务后，A 的延迟 Hello 因当前代次已是 9 而拒绝，B 的代次、任务 token 和到期时间不变。
   // 业务例子：renice-main 的容器重启后再次 Hello，服务端把它刚才没回报完的 2 个任务放回队列，返回 slot_id 11、12。
   rpc Hello(HelloRequest) returns (HelloResponse);
 
@@ -142,6 +149,8 @@ message HelloRequest {
   repeated LanguageInfo languages = 5;
   // 本次进程启动的随机 UUID；同次启动的 Hello 重试保持不变，新进程生成新值。例："b912b956-84d4-4534-a87d-559946868812"
   string instance_id = 6;
+  // 本机持久化的最近一次成功 session_generation；首次安装填 0，新 instance_id 登记时作为比较并交换的预期值。例：8（服务端当前代次也是 8）
+  int64 expected_session_generation = 7;
 }
 
 // HelloResponse 是 Hello 的出参。
