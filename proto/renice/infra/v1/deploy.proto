@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package renice.infra.v1;
+
+import "renice/infra/v1/common.proto";
+
+// Deploy 是服务端下发的发布命令，不需要额外角色；默认总超时 300 秒。
+// 同一个 compose 目录最多一个发布，第二个拒绝为 REJECTED「该 compose 目录已有发布在跑」。
+// 执行顺序：用内存凭据登录 registry → 逐个 docker pull → 将旧 .release.env 保存为 .release.env.prev，
+// 再把 env_var=image 写入 compose_dir 下的 .release.env（只改镜像版本文件，不动 .env 等运行配置）→
+// docker compose --env-file … up -d <services> → 等这些 compose service 的容器全部 healthy，
+// 且每个健康检查输出里的 version 等于目标 version → OK。
+// .release.env 必须作为 compose 的镜像变量输入；env_file 非空时同时加载它，.release.env 的镜像变量优先。
+// 健康超时或 unhealthy → FAILED；self_protect=true 时先回滚再报 FAILED，并在结果里填 rolled_back=true。
+// 发布断线例外：已经开始 docker compose up 的发布继续跑完，结果丢弃，服务端靠下一次 report 中的容器状态判断；
+// 尚未开始 compose up 时断线则停止，不回结果。命令及结果都不补传。
+// 回滚就是用历史版本重新发一次 Deploy，没有单独的回滚命令；只回滚镜像，不回滚数据库迁移。
+// .release.env.prev 也供本地 renice-agent rollback <服务> 兜底使用。
+message Deploy {
+  // 服务名。例："renice-sso"
+  string service = 1;
+  // 服务环境，prod 或 test。例："prod"
+  string env = 2;
+  // 目标版本，生产使用 semver tag，测试使用短提交哈希。例："v0.1.0-alpha.4"、"1a2b3c4"
+  string version = 3;
+  // compose 项目所在目录，同目录发布互斥。例："/opt/renice-sso"
+  string compose_dir = 4;
+  // 相对 compose_dir 的 compose 文件路径，空表示 deploy/docker-compose.yml。例："deploy/docker-compose.yml"
+  string compose_file = 5;
+  // 相对 compose_dir 的运行配置文件路径，空表示不额外传该 --env-file；镜像版本文件始终加载。例："deploy/.env"
+  string env_file = 6;
+  // 发布单元的全部镜像，必须一起发布、一起回滚。例：[{compose_service: "server", env_var: "SERVER_IMAGE", image: "registry.renice.cc/renice-sso-server:v0.1.0-alpha.4"}]
+  repeated ImageRef images = 7;
+  // 仓库凭据，只在内存中使用，不写磁盘、不打日志、不出现在 CommandOutput 中。例：{server: "registry.renice.cc", username: "renice-deploy", password: "<仓库密码>"}
+  RegistryAuth registry = 8;
+  // 等待健康检查的秒数，0 表示默认 120；self_protect 时固定使用 60 秒窗口。例：120
+  int32 health_timeout_seconds = 9;
+  // 只给 renice-infra 自身开启；发布后 60 秒内未全部 healthy 且版本匹配则自动回滚到上一版。例：true
+  bool self_protect = 10;
+}
+
+// ImageRef 是一个 compose service 对应的目标镜像及镜像变量。
+message ImageRef {
+  // compose 文件中的服务名。例："server"
+  string compose_service = 1;
+  // 写入 .release.env 的镜像变量名。例："SERVER_IMAGE"
+  string env_var = 2;
+  // 完整镜像地址和 tag。例："registry.renice.cc/renice-sso-server:v0.1.0-alpha.4"
+  string image = 3;
+}

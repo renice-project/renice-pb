@@ -282,6 +282,71 @@ func (ContainerEventType) EnumDescriptor() ([]byte, []int) {
 	return file_renice_infra_v1_agent_proto_rawDescGZIP(), []int{3}
 }
 
+// CommandStatus 是命令的最终状态，业务失败只影响该命令，不关闭 Connect 流。
+type CommandStatus int32
+
+const (
+	// 未指定，不能作为最终结果发送。
+	CommandStatus_COMMAND_STATUS_UNSPECIFIED CommandStatus = 0
+	// 执行成功。
+	CommandStatus_COMMAND_STATUS_OK CommandStatus = 1
+	// 已执行但失败，例如容器不存在、镜像拉取失败或健康检查失败。
+	CommandStatus_COMMAND_STATUS_FAILED CommandStatus = 2
+	// agent 不执行：命令未知、角色未开启或已有互斥任务在跑。
+	CommandStatus_COMMAND_STATUS_REJECTED CommandStatus = 3
+	// 收到 CancelCommand，已停止该命令。
+	CommandStatus_COMMAND_STATUS_CANCELED CommandStatus = 4
+	// 超过 Command 的总时限，已停止该命令。
+	CommandStatus_COMMAND_STATUS_TIMEOUT CommandStatus = 5
+)
+
+// Enum value maps for CommandStatus.
+var (
+	CommandStatus_name = map[int32]string{
+		0: "COMMAND_STATUS_UNSPECIFIED",
+		1: "COMMAND_STATUS_OK",
+		2: "COMMAND_STATUS_FAILED",
+		3: "COMMAND_STATUS_REJECTED",
+		4: "COMMAND_STATUS_CANCELED",
+		5: "COMMAND_STATUS_TIMEOUT",
+	}
+	CommandStatus_value = map[string]int32{
+		"COMMAND_STATUS_UNSPECIFIED": 0,
+		"COMMAND_STATUS_OK":          1,
+		"COMMAND_STATUS_FAILED":      2,
+		"COMMAND_STATUS_REJECTED":    3,
+		"COMMAND_STATUS_CANCELED":    4,
+		"COMMAND_STATUS_TIMEOUT":     5,
+	}
+)
+
+func (x CommandStatus) Enum() *CommandStatus {
+	p := new(CommandStatus)
+	*p = x
+	return p
+}
+
+func (x CommandStatus) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (CommandStatus) Descriptor() protoreflect.EnumDescriptor {
+	return file_renice_infra_v1_agent_proto_enumTypes[4].Descriptor()
+}
+
+func (CommandStatus) Type() protoreflect.EnumType {
+	return &file_renice_infra_v1_agent_proto_enumTypes[4]
+}
+
+func (x CommandStatus) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use CommandStatus.Descriptor instead.
+func (CommandStatus) EnumDescriptor() ([]byte, []int) {
+	return file_renice_infra_v1_agent_proto_rawDescGZIP(), []int{4}
+}
+
 // ConnectRequest 是 agent 发给服务端的一条消息。一条消息只带一种内容。
 type ConnectRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -293,6 +358,9 @@ type ConnectRequest struct {
 	//	*ConnectRequest_Report
 	//	*ConnectRequest_ContainerEvent
 	//	*ConnectRequest_HostInfo
+	//	*ConnectRequest_CommandResult
+	//	*ConnectRequest_CommandOutput
+	//	*ConnectRequest_ProbeResults
 	Payload       isConnectRequest_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -371,6 +439,33 @@ func (x *ConnectRequest) GetHostInfo() *HostInfo {
 	return nil
 }
 
+func (x *ConnectRequest) GetCommandResult() *CommandResult {
+	if x != nil {
+		if x, ok := x.Payload.(*ConnectRequest_CommandResult); ok {
+			return x.CommandResult
+		}
+	}
+	return nil
+}
+
+func (x *ConnectRequest) GetCommandOutput() *CommandOutput {
+	if x != nil {
+		if x, ok := x.Payload.(*ConnectRequest_CommandOutput); ok {
+			return x.CommandOutput
+		}
+	}
+	return nil
+}
+
+func (x *ConnectRequest) GetProbeResults() *ProbeResults {
+	if x != nil {
+		if x, ok := x.Payload.(*ConnectRequest_ProbeResults); ok {
+			return x.ProbeResults
+		}
+	}
+	return nil
+}
+
 type isConnectRequest_Payload interface {
 	isConnectRequest_Payload()
 }
@@ -395,6 +490,21 @@ type ConnectRequest_HostInfo struct {
 	HostInfo *HostInfo `protobuf:"bytes,4,opt,name=host_info,json=hostInfo,proto3,oneof"`
 }
 
+type ConnectRequest_CommandResult struct {
+	// 命令最终结果，正常连接内每条命令恰好一条；断线例外不回传。例：{id: "550e8400-e29b-41d4-a716-446655440000", status: COMMAND_STATUS_OK}
+	CommandResult *CommandResult `protobuf:"bytes,10,opt,name=command_result,json=commandResult,proto3,oneof"`
+}
+
+type ConnectRequest_CommandOutput struct {
+	// 命令执行中的批量输出。例：{id: "550e8400-e29b-41d4-a716-446655440000", seq: 1, lines: [{text: "正在拉取镜像"}]}
+	CommandOutput *CommandOutput `protobuf:"bytes,11,opt,name=command_output,json=commandOutput,proto3,oneof"`
+}
+
+type ConnectRequest_ProbeResults struct {
+	// 一秒内完成的探测结果批次。例：{results: [{task_id: "mw-3", ok: true}]}
+	ProbeResults *ProbeResults `protobuf:"bytes,12,opt,name=probe_results,json=probeResults,proto3,oneof"`
+}
+
 func (*ConnectRequest_Hello) isConnectRequest_Payload() {}
 
 func (*ConnectRequest_Report) isConnectRequest_Payload() {}
@@ -402,6 +512,12 @@ func (*ConnectRequest_Report) isConnectRequest_Payload() {}
 func (*ConnectRequest_ContainerEvent) isConnectRequest_Payload() {}
 
 func (*ConnectRequest_HostInfo) isConnectRequest_Payload() {}
+
+func (*ConnectRequest_CommandResult) isConnectRequest_Payload() {}
+
+func (*ConnectRequest_CommandOutput) isConnectRequest_Payload() {}
+
+func (*ConnectRequest_ProbeResults) isConnectRequest_Payload() {}
 
 // ConnectResponse 是服务端发给 agent 的一条消息。一条消息只带一种内容。
 type ConnectResponse struct {
@@ -412,6 +528,9 @@ type ConnectResponse struct {
 	//
 	//	*ConnectResponse_Welcome
 	//	*ConnectResponse_ReportAck
+	//	*ConnectResponse_Command
+	//	*ConnectResponse_CancelCommand
+	//	*ConnectResponse_ProbeSync
 	Payload       isConnectResponse_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -472,6 +591,33 @@ func (x *ConnectResponse) GetReportAck() *ReportAck {
 	return nil
 }
 
+func (x *ConnectResponse) GetCommand() *Command {
+	if x != nil {
+		if x, ok := x.Payload.(*ConnectResponse_Command); ok {
+			return x.Command
+		}
+	}
+	return nil
+}
+
+func (x *ConnectResponse) GetCancelCommand() *CancelCommand {
+	if x != nil {
+		if x, ok := x.Payload.(*ConnectResponse_CancelCommand); ok {
+			return x.CancelCommand
+		}
+	}
+	return nil
+}
+
+func (x *ConnectResponse) GetProbeSync() *ProbeSync {
+	if x != nil {
+		if x, ok := x.Payload.(*ConnectResponse_ProbeSync); ok {
+			return x.ProbeSync
+		}
+	}
+	return nil
+}
+
 type isConnectResponse_Payload interface {
 	isConnectResponse_Payload()
 }
@@ -486,9 +632,30 @@ type ConnectResponse_ReportAck struct {
 	ReportAck *ReportAck `protobuf:"bytes,2,opt,name=report_ack,json=reportAck,proto3,oneof"`
 }
 
+type ConnectResponse_Command struct {
+	// 下发一条白名单命令。例：{id: "550e8400-e29b-41d4-a716-446655440000", log_tail: {container: "renice-sso-server", follow: true}}
+	Command *Command `protobuf:"bytes,10,opt,name=command,proto3,oneof"`
+}
+
+type ConnectResponse_CancelCommand struct {
+	// 取消一条仍在运行的命令，已结束则忽略。例：{id: "550e8400-e29b-41d4-a716-446655440000"}
+	CancelCommand *CancelCommand `protobuf:"bytes,11,opt,name=cancel_command,json=cancelCommand,proto3,oneof"`
+}
+
+type ConnectResponse_ProbeSync struct {
+	// 全量探测期望状态，空列表停止全部探测。例：{tasks: [{id: "probe-12", kind: PROBE_KIND_HTTP, interval_seconds: 30, timeout_seconds: 10, http: {url: "https://renice.cc/healthz"}}]}
+	ProbeSync *ProbeSync `protobuf:"bytes,12,opt,name=probe_sync,json=probeSync,proto3,oneof"`
+}
+
 func (*ConnectResponse_Welcome) isConnectResponse_Payload() {}
 
 func (*ConnectResponse_ReportAck) isConnectResponse_Payload() {}
+
+func (*ConnectResponse_Command) isConnectResponse_Payload() {}
+
+func (*ConnectResponse_CancelCommand) isConnectResponse_Payload() {}
+
+func (*ConnectResponse_ProbeSync) isConnectResponse_Payload() {}
 
 // Hello 是 agent 连上之后发的第一条消息。
 type Hello struct {
@@ -1318,9 +1485,11 @@ type Psi struct {
 	// 至少有一个任务在等 IO 的时间占比。例：0.35
 	IoSomeAvg10 float64 `protobuf:"fixed64,5,opt,name=io_some_avg10,json=ioSomeAvg10,proto3" json:"io_some_avg10,omitempty"`
 	// 所有任务都在等 IO 的时间占比。例：0.10
-	IoFullAvg10   float64 `protobuf:"fixed64,6,opt,name=io_full_avg10,json=ioFullAvg10,proto3" json:"io_full_avg10,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	IoFullAvg10 float64 `protobuf:"fixed64,6,opt,name=io_full_avg10,json=ioFullAvg10,proto3" json:"io_full_avg10,omitempty"`
+	// 内核是否提供 CPU full 行；false 时 cpu_full_avg10 的 0 表示不可用，true 时 0 表示确实无压力，不改旧字段语义。例：false
+	CpuFullAvailable bool `protobuf:"varint,7,opt,name=cpu_full_available,json=cpuFullAvailable,proto3" json:"cpu_full_available,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *Psi) Reset() {
@@ -1393,6 +1562,13 @@ func (x *Psi) GetIoFullAvg10() float64 {
 		return x.IoFullAvg10
 	}
 	return 0
+}
+
+func (x *Psi) GetCpuFullAvailable() bool {
+	if x != nil {
+		return x.CpuFullAvailable
+	}
+	return false
 }
 
 // ContainerMetrics 是一个容器在这次上报时的状态和资源使用。
@@ -1761,21 +1937,632 @@ func (x *ReportAck) GetSeq() int64 {
 	return 0
 }
 
+// Command 是服务端生成并下发的一条白名单命令，正常连接内每条命令恰好返回一条最终结果。
+// 不同命令可并发；最多一个构建，同一 compose 目录最多一个发布；断线取消与发布例外见 Connect/Deploy。
+// 只执行认识的 kind，空 oneof 或未知类型 → REJECTED「agent 版本不支持这条命令」。
+type Command struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 服务端生成的 UUID，输出与结果都靠它关联。例："550e8400-e29b-41d4-a716-446655440000"
+	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// agent 端总超时，单位秒，0 使用类型默认值：日志 follow 不限时、发布 300、构建 1800、解析 30。例：300
+	TimeoutSeconds int32 `protobuf:"varint,2,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
+	// 命令内容按功能分号段：20–29 日志、30–39 发布、40–49 构建、50–59 解析。
+	// 后续功能在各自号段内加字段，不用 reserved 占号段。
+	//
+	// Types that are valid to be assigned to Kind:
+	//
+	//	*Command_LogTail
+	//	*Command_Deploy
+	//	*Command_Build
+	//	*Command_DnsList
+	//	*Command_DnsAddA
+	//	*Command_DnsSetA
+	//	*Command_DnsDelete
+	Kind          isCommand_Kind `protobuf_oneof:"kind"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Command) Reset() {
+	*x = Command{}
+	mi := &file_renice_infra_v1_agent_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Command) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Command) ProtoMessage() {}
+
+func (x *Command) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_infra_v1_agent_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Command.ProtoReflect.Descriptor instead.
+func (*Command) Descriptor() ([]byte, []int) {
+	return file_renice_infra_v1_agent_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *Command) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *Command) GetTimeoutSeconds() int32 {
+	if x != nil {
+		return x.TimeoutSeconds
+	}
+	return 0
+}
+
+func (x *Command) GetKind() isCommand_Kind {
+	if x != nil {
+		return x.Kind
+	}
+	return nil
+}
+
+func (x *Command) GetLogTail() *LogTail {
+	if x != nil {
+		if x, ok := x.Kind.(*Command_LogTail); ok {
+			return x.LogTail
+		}
+	}
+	return nil
+}
+
+func (x *Command) GetDeploy() *Deploy {
+	if x != nil {
+		if x, ok := x.Kind.(*Command_Deploy); ok {
+			return x.Deploy
+		}
+	}
+	return nil
+}
+
+func (x *Command) GetBuild() *Build {
+	if x != nil {
+		if x, ok := x.Kind.(*Command_Build); ok {
+			return x.Build
+		}
+	}
+	return nil
+}
+
+func (x *Command) GetDnsList() *DnsList {
+	if x != nil {
+		if x, ok := x.Kind.(*Command_DnsList); ok {
+			return x.DnsList
+		}
+	}
+	return nil
+}
+
+func (x *Command) GetDnsAddA() *DnsAddA {
+	if x != nil {
+		if x, ok := x.Kind.(*Command_DnsAddA); ok {
+			return x.DnsAddA
+		}
+	}
+	return nil
+}
+
+func (x *Command) GetDnsSetA() *DnsSetA {
+	if x != nil {
+		if x, ok := x.Kind.(*Command_DnsSetA); ok {
+			return x.DnsSetA
+		}
+	}
+	return nil
+}
+
+func (x *Command) GetDnsDelete() *DnsDelete {
+	if x != nil {
+		if x, ok := x.Kind.(*Command_DnsDelete); ok {
+			return x.DnsDelete
+		}
+	}
+	return nil
+}
+
+type isCommand_Kind interface {
+	isCommand_Kind()
+}
+
+type Command_LogTail struct {
+	// 读取或跟随容器日志。例：{container: "renice-sso-server", tail_lines: 200, follow: true}
+	LogTail *LogTail `protobuf:"bytes,20,opt,name=log_tail,json=logTail,proto3,oneof"`
+}
+
+type Command_Deploy struct {
+	// 发布一个完整的镜像单元。例：{service: "renice-sso", env: "prod", version: "v0.1.0-alpha.4", compose_dir: "/opt/renice-sso"}
+	Deploy *Deploy `protobuf:"bytes,30,opt,name=deploy,proto3,oneof"`
+}
+
+type Command_Build struct {
+	// 构建并推送发布单元的全部镜像。例：{repo_url: "https://github.com/renice-project/renice-sso.git", commit: "1234567890abcdef1234567890abcdef12345678", version: "1a2b3c4"}
+	Build *Build `protobuf:"bytes,40,opt,name=build,proto3,oneof"`
+}
+
+type Command_DnsList struct {
+	// 列出域名下全部解析。例：{domain: "renice.cc"}
+	DnsList *DnsList `protobuf:"bytes,50,opt,name=dns_list,json=dnsList,proto3,oneof"`
+}
+
+type Command_DnsAddA struct {
+	// 新增一条 A 记录。例：{domain: "renice.cc", rr: "health", value: "98.142.250.87", ttl: 600}
+	DnsAddA *DnsAddA `protobuf:"bytes,51,opt,name=dns_add_a,json=dnsAddA,proto3,oneof"`
+}
+
+type Command_DnsSetA struct {
+	// 修改一条 A 记录。例：{domain: "renice.cc", record_id: "123456789012345678", rr: "health", value: "98.142.250.87", ttl: 600}
+	DnsSetA *DnsSetA `protobuf:"bytes,52,opt,name=dns_set_a,json=dnsSetA,proto3,oneof"`
+}
+
+type Command_DnsDelete struct {
+	// 删除一条 A 记录。例：{domain: "renice.cc", record_id: "123456789012345678"}
+	DnsDelete *DnsDelete `protobuf:"bytes,53,opt,name=dns_delete,json=dnsDelete,proto3,oneof"`
+}
+
+func (*Command_LogTail) isCommand_Kind() {}
+
+func (*Command_Deploy) isCommand_Kind() {}
+
+func (*Command_Build) isCommand_Kind() {}
+
+func (*Command_DnsList) isCommand_Kind() {}
+
+func (*Command_DnsAddA) isCommand_Kind() {}
+
+func (*Command_DnsSetA) isCommand_Kind() {}
+
+func (*Command_DnsDelete) isCommand_Kind() {}
+
+// CommandResult 是 agent 对命令的一条最终结果，正常连接内恰好一条；断线时不回、不补传。
+// OK 时 error 为空；其他状态必须给出可读的中文原因，不能泄露密码或 token。
+type CommandResult struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 对应 Command.id。例："550e8400-e29b-41d4-a716-446655440000"
+	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// 最终状态，未指定不是合法最终结果。例：COMMAND_STATUS_OK
+	Status CommandStatus `protobuf:"varint,2,opt,name=status,proto3,enum=renice.infra.v1.CommandStatus" json:"status,omitempty"`
+	// 给人看的中文原因，失败、拒绝、取消或超时时必填，须去除凭据。例："已有构建在跑"
+	Error string `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	// 命令结束的时间。例：2026-10-31T16:25:00+08:00
+	FinishedAt *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`
+	// 结果按与 Command.kind 相同的功能号段分配：20–29 日志（无 detail）、30–39 发布、40–49 构建、50–59 解析。
+	//
+	// Types that are valid to be assigned to Detail:
+	//
+	//	*CommandResult_Deploy
+	//	*CommandResult_Build
+	//	*CommandResult_DnsRecords
+	//	*CommandResult_DnsChange
+	Detail        isCommandResult_Detail `protobuf_oneof:"detail"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CommandResult) Reset() {
+	*x = CommandResult{}
+	mi := &file_renice_infra_v1_agent_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CommandResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CommandResult) ProtoMessage() {}
+
+func (x *CommandResult) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_infra_v1_agent_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CommandResult.ProtoReflect.Descriptor instead.
+func (*CommandResult) Descriptor() ([]byte, []int) {
+	return file_renice_infra_v1_agent_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *CommandResult) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *CommandResult) GetStatus() CommandStatus {
+	if x != nil {
+		return x.Status
+	}
+	return CommandStatus_COMMAND_STATUS_UNSPECIFIED
+}
+
+func (x *CommandResult) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+func (x *CommandResult) GetFinishedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.FinishedAt
+	}
+	return nil
+}
+
+func (x *CommandResult) GetDetail() isCommandResult_Detail {
+	if x != nil {
+		return x.Detail
+	}
+	return nil
+}
+
+func (x *CommandResult) GetDeploy() *DeployResult {
+	if x != nil {
+		if x, ok := x.Detail.(*CommandResult_Deploy); ok {
+			return x.Deploy
+		}
+	}
+	return nil
+}
+
+func (x *CommandResult) GetBuild() *BuildResult {
+	if x != nil {
+		if x, ok := x.Detail.(*CommandResult_Build); ok {
+			return x.Build
+		}
+	}
+	return nil
+}
+
+func (x *CommandResult) GetDnsRecords() *DnsRecords {
+	if x != nil {
+		if x, ok := x.Detail.(*CommandResult_DnsRecords); ok {
+			return x.DnsRecords
+		}
+	}
+	return nil
+}
+
+func (x *CommandResult) GetDnsChange() *DnsChange {
+	if x != nil {
+		if x, ok := x.Detail.(*CommandResult_DnsChange); ok {
+			return x.DnsChange
+		}
+	}
+	return nil
+}
+
+type isCommandResult_Detail interface {
+	isCommandResult_Detail()
+}
+
+type CommandResult_Deploy struct {
+	// 发布结果，包含回滚情况；失败时也可带实际观测结果。例：{previous_version: "v0.1.0-alpha.3", rolled_back: false}
+	Deploy *DeployResult `protobuf:"bytes,30,opt,name=deploy,proto3,oneof"`
+}
+
+type CommandResult_Build struct {
+	// 构建产物及耗时。例：{duration_seconds: 123.5}
+	Build *BuildResult `protobuf:"bytes,40,opt,name=build,proto3,oneof"`
+}
+
+type CommandResult_DnsRecords struct {
+	// 列出解析的结果，对应 DnsList。例：{records: [{record_id: "123456789012345678", rr: "health", type: "A", value: "98.142.250.87"}]}
+	DnsRecords *DnsRecords `protobuf:"bytes,50,opt,name=dns_records,json=dnsRecords,proto3,oneof"`
+}
+
+type CommandResult_DnsChange struct {
+	// 新增、修改或删除的结果。例：{record_id: "123456789012345678"}
+	DnsChange *DnsChange `protobuf:"bytes,51,opt,name=dns_change,json=dnsChange,proto3,oneof"`
+}
+
+func (*CommandResult_Deploy) isCommandResult_Detail() {}
+
+func (*CommandResult_Build) isCommandResult_Detail() {}
+
+func (*CommandResult_DnsRecords) isCommandResult_Detail() {}
+
+func (*CommandResult_DnsChange) isCommandResult_Detail() {}
+
+// CommandOutput 是命令执行中的一批文本输出；agent 攒最多 200 行或 500ms 就发一批，以先到者为准。
+// 输出不补传，凭据必须先脱敏；最终结果在最后一批输出之后发送。
+type CommandOutput struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 对应 Command.id。例："550e8400-e29b-41d4-a716-446655440000"
+	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// 同一命令内批次序号从 1 递增，服务端按它排序去重。例：1
+	Seq int64 `protobuf:"varint,2,opt,name=seq,proto3" json:"seq,omitempty"`
+	// 本批输出，最多 200 行；单行截断规则见 OutputLine。例：[{stream: OUTPUT_STREAM_SYSTEM, text: "正在拉取镜像"}]
+	Lines         []*OutputLine `protobuf:"bytes,3,rep,name=lines,proto3" json:"lines,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CommandOutput) Reset() {
+	*x = CommandOutput{}
+	mi := &file_renice_infra_v1_agent_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CommandOutput) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CommandOutput) ProtoMessage() {}
+
+func (x *CommandOutput) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_infra_v1_agent_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CommandOutput.ProtoReflect.Descriptor instead.
+func (*CommandOutput) Descriptor() ([]byte, []int) {
+	return file_renice_infra_v1_agent_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *CommandOutput) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *CommandOutput) GetSeq() int64 {
+	if x != nil {
+		return x.Seq
+	}
+	return 0
+}
+
+func (x *CommandOutput) GetLines() []*OutputLine {
+	if x != nil {
+		return x.Lines
+	}
+	return nil
+}
+
+// CancelCommand 是服务端取消命令的请求，例如关闭日志页面或取消构建。
+// agent 收到后停止命令并回 CANCELED；命令已经结束就忽略，不能再生成第二条最终结果。
+type CancelCommand struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 要取消的 Command.id。例："550e8400-e29b-41d4-a716-446655440000"
+	Id            string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CancelCommand) Reset() {
+	*x = CancelCommand{}
+	mi := &file_renice_infra_v1_agent_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CancelCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CancelCommand) ProtoMessage() {}
+
+func (x *CancelCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_infra_v1_agent_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CancelCommand.ProtoReflect.Descriptor instead.
+func (*CancelCommand) Descriptor() ([]byte, []int) {
+	return file_renice_infra_v1_agent_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *CancelCommand) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+// DeployResult 是发布结束时回传的实际状态，包括自保护回滚是否完成。
+// 与 DeployedContainer 放在这里以复用原文件内的 ContainerHealth，避免 agent.proto 与 deploy.proto 循环导入；
+// 保留原枚举的文件位置以通过 FILE 级向后兼容检查。
+type DeployResult struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 发布之前的版本，首次发布没有上一版时为空。例："v0.1.0-alpha.3"
+	PreviousVersion string `protobuf:"bytes,1,opt,name=previous_version,json=previousVersion,proto3" json:"previous_version,omitempty"`
+	// 是否已完成自保护回滚；回滚尝试也失败时为 false，并在 CommandResult.error 说明。例：true
+	RolledBack bool `protobuf:"varint,2,opt,name=rolled_back,json=rolledBack,proto3" json:"rolled_back,omitempty"`
+	// 结束时观测到的各服务容器及健康状态；回滚成功时是回滚后的状态。例：[{compose_service: "server", container: "renice-sso-server", health: CONTAINER_HEALTH_HEALTHY, version: "v0.1.0-alpha.3"}]
+	Containers    []*DeployedContainer `protobuf:"bytes,3,rep,name=containers,proto3" json:"containers,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeployResult) Reset() {
+	*x = DeployResult{}
+	mi := &file_renice_infra_v1_agent_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeployResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeployResult) ProtoMessage() {}
+
+func (x *DeployResult) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_infra_v1_agent_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeployResult.ProtoReflect.Descriptor instead.
+func (*DeployResult) Descriptor() ([]byte, []int) {
+	return file_renice_infra_v1_agent_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *DeployResult) GetPreviousVersion() string {
+	if x != nil {
+		return x.PreviousVersion
+	}
+	return ""
+}
+
+func (x *DeployResult) GetRolledBack() bool {
+	if x != nil {
+		return x.RolledBack
+	}
+	return false
+}
+
+func (x *DeployResult) GetContainers() []*DeployedContainer {
+	if x != nil {
+		return x.Containers
+	}
+	return nil
+}
+
+// DeployedContainer 是一次发布结束时一个 compose service 的容器状态。
+type DeployedContainer struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// compose 服务名。例："server"
+	ComposeService string `protobuf:"bytes,1,opt,name=compose_service,json=composeService,proto3" json:"compose_service,omitempty"`
+	// 容器名，不带前导斜杠。例："renice-sso-server"
+	Container string `protobuf:"bytes,2,opt,name=container,proto3" json:"container,omitempty"`
+	// Docker 健康检查状态，复用采集通道的枚举。例：CONTAINER_HEALTH_HEALTHY
+	Health ContainerHealth `protobuf:"varint,3,opt,name=health,proto3,enum=renice.infra.v1.ContainerHealth" json:"health,omitempty"`
+	// 从容器健康检查输出读到的版本；没有取得时为空。例："v0.1.0-alpha.4"
+	Version       string `protobuf:"bytes,4,opt,name=version,proto3" json:"version,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeployedContainer) Reset() {
+	*x = DeployedContainer{}
+	mi := &file_renice_infra_v1_agent_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeployedContainer) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeployedContainer) ProtoMessage() {}
+
+func (x *DeployedContainer) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_infra_v1_agent_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeployedContainer.ProtoReflect.Descriptor instead.
+func (*DeployedContainer) Descriptor() ([]byte, []int) {
+	return file_renice_infra_v1_agent_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *DeployedContainer) GetComposeService() string {
+	if x != nil {
+		return x.ComposeService
+	}
+	return ""
+}
+
+func (x *DeployedContainer) GetContainer() string {
+	if x != nil {
+		return x.Container
+	}
+	return ""
+}
+
+func (x *DeployedContainer) GetHealth() ContainerHealth {
+	if x != nil {
+		return x.Health
+	}
+	return ContainerHealth_CONTAINER_HEALTH_UNSPECIFIED
+}
+
+func (x *DeployedContainer) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
 var File_renice_infra_v1_agent_proto protoreflect.FileDescriptor
 
 const file_renice_infra_v1_agent_proto_rawDesc = "" +
 	"\n" +
-	"\x1brenice/infra/v1/agent.proto\x12\x0frenice.infra.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x84\x02\n" +
+	"\x1brenice/infra/v1/agent.proto\x12\x0frenice.infra.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1brenice/infra/v1/build.proto\x1a\x1crenice/infra/v1/common.proto\x1a\x1crenice/infra/v1/deploy.proto\x1a\x19renice/infra/v1/dns.proto\x1a\x1arenice/infra/v1/logs.proto\x1a\x1brenice/infra/v1/probe.proto\"\xdc\x03\n" +
 	"\x0eConnectRequest\x12.\n" +
 	"\x05hello\x18\x01 \x01(\v2\x16.renice.infra.v1.HelloH\x00R\x05hello\x121\n" +
 	"\x06report\x18\x02 \x01(\v2\x17.renice.infra.v1.ReportH\x00R\x06report\x12J\n" +
 	"\x0fcontainer_event\x18\x03 \x01(\v2\x1f.renice.infra.v1.ContainerEventH\x00R\x0econtainerEvent\x128\n" +
-	"\thost_info\x18\x04 \x01(\v2\x19.renice.infra.v1.HostInfoH\x00R\bhostInfoB\t\n" +
-	"\apayload\"\x8f\x01\n" +
+	"\thost_info\x18\x04 \x01(\v2\x19.renice.infra.v1.HostInfoH\x00R\bhostInfo\x12G\n" +
+	"\x0ecommand_result\x18\n" +
+	" \x01(\v2\x1e.renice.infra.v1.CommandResultH\x00R\rcommandResult\x12G\n" +
+	"\x0ecommand_output\x18\v \x01(\v2\x1e.renice.infra.v1.CommandOutputH\x00R\rcommandOutput\x12D\n" +
+	"\rprobe_results\x18\f \x01(\v2\x1d.renice.infra.v1.ProbeResultsH\x00R\fprobeResultsB\t\n" +
+	"\apayload\"\xcb\x02\n" +
 	"\x0fConnectResponse\x124\n" +
 	"\awelcome\x18\x01 \x01(\v2\x18.renice.infra.v1.WelcomeH\x00R\awelcome\x12;\n" +
 	"\n" +
-	"report_ack\x18\x02 \x01(\v2\x1a.renice.infra.v1.ReportAckH\x00R\treportAckB\t\n" +
+	"report_ack\x18\x02 \x01(\v2\x1a.renice.infra.v1.ReportAckH\x00R\treportAck\x124\n" +
+	"\acommand\x18\n" +
+	" \x01(\v2\x18.renice.infra.v1.CommandH\x00R\acommand\x12G\n" +
+	"\x0ecancel_command\x18\v \x01(\v2\x1e.renice.infra.v1.CancelCommandH\x00R\rcancelCommand\x12;\n" +
+	"\n" +
+	"probe_sync\x18\f \x01(\v2\x1a.renice.infra.v1.ProbeSyncH\x00R\tprobeSyncB\t\n" +
 	"\apayload\"\xc6\x01\n" +
 	"\x05Hello\x12#\n" +
 	"\ragent_version\x18\x01 \x01(\tR\fagentVersion\x12\x17\n" +
@@ -1852,14 +2639,15 @@ const file_renice_infra_v1_agent_proto_rawDesc = "" +
 	"\x15rx_peak_bytes_per_sec\x18\x03 \x01(\x01R\x11rxPeakBytesPerSec\x120\n" +
 	"\x15tx_peak_bytes_per_sec\x18\x04 \x01(\x01R\x11txPeakBytesPerSec\x12$\n" +
 	"\x0erx_bytes_total\x18\x05 \x01(\x03R\frxBytesTotal\x12$\n" +
-	"\x0etx_bytes_total\x18\x06 \x01(\x03R\ftxBytesTotal\"\xf1\x01\n" +
+	"\x0etx_bytes_total\x18\x06 \x01(\x03R\ftxBytesTotal\"\x9f\x02\n" +
 	"\x03Psi\x12$\n" +
 	"\x0ecpu_some_avg10\x18\x01 \x01(\x01R\fcpuSomeAvg10\x12$\n" +
 	"\x0ecpu_full_avg10\x18\x02 \x01(\x01R\fcpuFullAvg10\x12*\n" +
 	"\x11memory_some_avg10\x18\x03 \x01(\x01R\x0fmemorySomeAvg10\x12*\n" +
 	"\x11memory_full_avg10\x18\x04 \x01(\x01R\x0fmemoryFullAvg10\x12\"\n" +
 	"\rio_some_avg10\x18\x05 \x01(\x01R\vioSomeAvg10\x12\"\n" +
-	"\rio_full_avg10\x18\x06 \x01(\x01R\vioFullAvg10\"\xce\x06\n" +
+	"\rio_full_avg10\x18\x06 \x01(\x01R\vioFullAvg10\x12,\n" +
+	"\x12cpu_full_available\x18\a \x01(\bR\x10cpuFullAvailable\"\xce\x06\n" +
 	"\x10ContainerMetrics\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
@@ -1896,7 +2684,50 @@ const file_renice_infra_v1_agent_proto_rawDesc = "" +
 	"occurredAt\"4\n" +
 	"\tReportAck\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x10\n" +
-	"\x03seq\x18\x02 \x01(\x03R\x03seq*\x83\x01\n" +
+	"\x03seq\x18\x02 \x01(\x03R\x03seq\"\xc8\x03\n" +
+	"\aCommand\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12'\n" +
+	"\x0ftimeout_seconds\x18\x02 \x01(\x05R\x0etimeoutSeconds\x125\n" +
+	"\blog_tail\x18\x14 \x01(\v2\x18.renice.infra.v1.LogTailH\x00R\alogTail\x121\n" +
+	"\x06deploy\x18\x1e \x01(\v2\x17.renice.infra.v1.DeployH\x00R\x06deploy\x12.\n" +
+	"\x05build\x18( \x01(\v2\x16.renice.infra.v1.BuildH\x00R\x05build\x125\n" +
+	"\bdns_list\x182 \x01(\v2\x18.renice.infra.v1.DnsListH\x00R\adnsList\x126\n" +
+	"\tdns_add_a\x183 \x01(\v2\x18.renice.infra.v1.DnsAddAH\x00R\adnsAddA\x126\n" +
+	"\tdns_set_a\x184 \x01(\v2\x18.renice.infra.v1.DnsSetAH\x00R\adnsSetA\x12;\n" +
+	"\n" +
+	"dns_delete\x185 \x01(\v2\x1a.renice.infra.v1.DnsDeleteH\x00R\tdnsDeleteB\x06\n" +
+	"\x04kind\"\xa0\x03\n" +
+	"\rCommandResult\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x126\n" +
+	"\x06status\x18\x02 \x01(\x0e2\x1e.renice.infra.v1.CommandStatusR\x06status\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\x12;\n" +
+	"\vfinished_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"finishedAt\x127\n" +
+	"\x06deploy\x18\x1e \x01(\v2\x1d.renice.infra.v1.DeployResultH\x00R\x06deploy\x124\n" +
+	"\x05build\x18( \x01(\v2\x1c.renice.infra.v1.BuildResultH\x00R\x05build\x12>\n" +
+	"\vdns_records\x182 \x01(\v2\x1b.renice.infra.v1.DnsRecordsH\x00R\n" +
+	"dnsRecords\x12;\n" +
+	"\n" +
+	"dns_change\x183 \x01(\v2\x1a.renice.infra.v1.DnsChangeH\x00R\tdnsChangeB\b\n" +
+	"\x06detail\"d\n" +
+	"\rCommandOutput\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x10\n" +
+	"\x03seq\x18\x02 \x01(\x03R\x03seq\x121\n" +
+	"\x05lines\x18\x03 \x03(\v2\x1b.renice.infra.v1.OutputLineR\x05lines\"\x1f\n" +
+	"\rCancelCommand\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\"\x9e\x01\n" +
+	"\fDeployResult\x12)\n" +
+	"\x10previous_version\x18\x01 \x01(\tR\x0fpreviousVersion\x12\x1f\n" +
+	"\vrolled_back\x18\x02 \x01(\bR\n" +
+	"rolledBack\x12B\n" +
+	"\n" +
+	"containers\x18\x03 \x03(\v2\".renice.infra.v1.DeployedContainerR\n" +
+	"containers\"\xae\x01\n" +
+	"\x11DeployedContainer\x12'\n" +
+	"\x0fcompose_service\x18\x01 \x01(\tR\x0ecomposeService\x12\x1c\n" +
+	"\tcontainer\x18\x02 \x01(\tR\tcontainer\x128\n" +
+	"\x06health\x18\x03 \x01(\x0e2 .renice.infra.v1.ContainerHealthR\x06health\x12\x18\n" +
+	"\aversion\x18\x04 \x01(\tR\aversion*\x83\x01\n" +
 	"\tAgentRole\x12\x1a\n" +
 	"\x16AGENT_ROLE_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12AGENT_ROLE_BUILDER\x10\x01\x12\x15\n" +
@@ -1924,7 +2755,14 @@ const file_renice_infra_v1_agent_proto_rawDesc = "" +
 	"\x18CONTAINER_EVENT_TYPE_DIE\x10\x02\x12\x1c\n" +
 	"\x18CONTAINER_EVENT_TYPE_OOM\x10\x03\x12\x1f\n" +
 	"\x1bCONTAINER_EVENT_TYPE_HEALTH\x10\x04\x12 \n" +
-	"\x1cCONTAINER_EVENT_TYPE_DESTROY\x10\x052`\n" +
+	"\x1cCONTAINER_EVENT_TYPE_DESTROY\x10\x05*\xb7\x01\n" +
+	"\rCommandStatus\x12\x1e\n" +
+	"\x1aCOMMAND_STATUS_UNSPECIFIED\x10\x00\x12\x15\n" +
+	"\x11COMMAND_STATUS_OK\x10\x01\x12\x19\n" +
+	"\x15COMMAND_STATUS_FAILED\x10\x02\x12\x1b\n" +
+	"\x17COMMAND_STATUS_REJECTED\x10\x03\x12\x1b\n" +
+	"\x17COMMAND_STATUS_CANCELED\x10\x04\x12\x1a\n" +
+	"\x16COMMAND_STATUS_TIMEOUT\x10\x052`\n" +
 	"\fAgentService\x12P\n" +
 	"\aConnect\x12\x1f.renice.infra.v1.ConnectRequest\x1a .renice.infra.v1.ConnectResponse(\x010\x01B\xc3\x01\n" +
 	"\x13com.renice.infra.v1B\n" +
@@ -1942,61 +2780,103 @@ func file_renice_infra_v1_agent_proto_rawDescGZIP() []byte {
 	return file_renice_infra_v1_agent_proto_rawDescData
 }
 
-var file_renice_infra_v1_agent_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_renice_infra_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_renice_infra_v1_agent_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
+var file_renice_infra_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_renice_infra_v1_agent_proto_goTypes = []any{
 	(AgentRole)(0),                // 0: renice.infra.v1.AgentRole
 	(ContainerState)(0),           // 1: renice.infra.v1.ContainerState
 	(ContainerHealth)(0),          // 2: renice.infra.v1.ContainerHealth
 	(ContainerEventType)(0),       // 3: renice.infra.v1.ContainerEventType
-	(*ConnectRequest)(nil),        // 4: renice.infra.v1.ConnectRequest
-	(*ConnectResponse)(nil),       // 5: renice.infra.v1.ConnectResponse
-	(*Hello)(nil),                 // 6: renice.infra.v1.Hello
-	(*HostInfo)(nil),              // 7: renice.infra.v1.HostInfo
-	(*Welcome)(nil),               // 8: renice.infra.v1.Welcome
-	(*Report)(nil),                // 9: renice.infra.v1.Report
-	(*HostMetrics)(nil),           // 10: renice.infra.v1.HostMetrics
-	(*DiskUsage)(nil),             // 11: renice.infra.v1.DiskUsage
-	(*DiskIO)(nil),                // 12: renice.infra.v1.DiskIO
-	(*NetMetrics)(nil),            // 13: renice.infra.v1.NetMetrics
-	(*Psi)(nil),                   // 14: renice.infra.v1.Psi
-	(*ContainerMetrics)(nil),      // 15: renice.infra.v1.ContainerMetrics
-	(*ContainerEvent)(nil),        // 16: renice.infra.v1.ContainerEvent
-	(*ReportAck)(nil),             // 17: renice.infra.v1.ReportAck
-	(*timestamppb.Timestamp)(nil), // 18: google.protobuf.Timestamp
+	(CommandStatus)(0),            // 4: renice.infra.v1.CommandStatus
+	(*ConnectRequest)(nil),        // 5: renice.infra.v1.ConnectRequest
+	(*ConnectResponse)(nil),       // 6: renice.infra.v1.ConnectResponse
+	(*Hello)(nil),                 // 7: renice.infra.v1.Hello
+	(*HostInfo)(nil),              // 8: renice.infra.v1.HostInfo
+	(*Welcome)(nil),               // 9: renice.infra.v1.Welcome
+	(*Report)(nil),                // 10: renice.infra.v1.Report
+	(*HostMetrics)(nil),           // 11: renice.infra.v1.HostMetrics
+	(*DiskUsage)(nil),             // 12: renice.infra.v1.DiskUsage
+	(*DiskIO)(nil),                // 13: renice.infra.v1.DiskIO
+	(*NetMetrics)(nil),            // 14: renice.infra.v1.NetMetrics
+	(*Psi)(nil),                   // 15: renice.infra.v1.Psi
+	(*ContainerMetrics)(nil),      // 16: renice.infra.v1.ContainerMetrics
+	(*ContainerEvent)(nil),        // 17: renice.infra.v1.ContainerEvent
+	(*ReportAck)(nil),             // 18: renice.infra.v1.ReportAck
+	(*Command)(nil),               // 19: renice.infra.v1.Command
+	(*CommandResult)(nil),         // 20: renice.infra.v1.CommandResult
+	(*CommandOutput)(nil),         // 21: renice.infra.v1.CommandOutput
+	(*CancelCommand)(nil),         // 22: renice.infra.v1.CancelCommand
+	(*DeployResult)(nil),          // 23: renice.infra.v1.DeployResult
+	(*DeployedContainer)(nil),     // 24: renice.infra.v1.DeployedContainer
+	(*ProbeResults)(nil),          // 25: renice.infra.v1.ProbeResults
+	(*ProbeSync)(nil),             // 26: renice.infra.v1.ProbeSync
+	(*timestamppb.Timestamp)(nil), // 27: google.protobuf.Timestamp
+	(*LogTail)(nil),               // 28: renice.infra.v1.LogTail
+	(*Deploy)(nil),                // 29: renice.infra.v1.Deploy
+	(*Build)(nil),                 // 30: renice.infra.v1.Build
+	(*DnsList)(nil),               // 31: renice.infra.v1.DnsList
+	(*DnsAddA)(nil),               // 32: renice.infra.v1.DnsAddA
+	(*DnsSetA)(nil),               // 33: renice.infra.v1.DnsSetA
+	(*DnsDelete)(nil),             // 34: renice.infra.v1.DnsDelete
+	(*BuildResult)(nil),           // 35: renice.infra.v1.BuildResult
+	(*DnsRecords)(nil),            // 36: renice.infra.v1.DnsRecords
+	(*DnsChange)(nil),             // 37: renice.infra.v1.DnsChange
+	(*OutputLine)(nil),            // 38: renice.infra.v1.OutputLine
 }
 var file_renice_infra_v1_agent_proto_depIdxs = []int32{
-	6,  // 0: renice.infra.v1.ConnectRequest.hello:type_name -> renice.infra.v1.Hello
-	9,  // 1: renice.infra.v1.ConnectRequest.report:type_name -> renice.infra.v1.Report
-	16, // 2: renice.infra.v1.ConnectRequest.container_event:type_name -> renice.infra.v1.ContainerEvent
-	7,  // 3: renice.infra.v1.ConnectRequest.host_info:type_name -> renice.infra.v1.HostInfo
-	8,  // 4: renice.infra.v1.ConnectResponse.welcome:type_name -> renice.infra.v1.Welcome
-	17, // 5: renice.infra.v1.ConnectResponse.report_ack:type_name -> renice.infra.v1.ReportAck
-	7,  // 6: renice.infra.v1.Hello.host_info:type_name -> renice.infra.v1.HostInfo
-	0,  // 7: renice.infra.v1.Hello.roles:type_name -> renice.infra.v1.AgentRole
-	18, // 8: renice.infra.v1.HostInfo.boot_time:type_name -> google.protobuf.Timestamp
-	18, // 9: renice.infra.v1.Welcome.server_time:type_name -> google.protobuf.Timestamp
-	18, // 10: renice.infra.v1.Report.sampled_at:type_name -> google.protobuf.Timestamp
-	10, // 11: renice.infra.v1.Report.host:type_name -> renice.infra.v1.HostMetrics
-	15, // 12: renice.infra.v1.Report.containers:type_name -> renice.infra.v1.ContainerMetrics
-	11, // 13: renice.infra.v1.HostMetrics.disks:type_name -> renice.infra.v1.DiskUsage
-	12, // 14: renice.infra.v1.HostMetrics.disk_io:type_name -> renice.infra.v1.DiskIO
-	13, // 15: renice.infra.v1.HostMetrics.net:type_name -> renice.infra.v1.NetMetrics
-	14, // 16: renice.infra.v1.HostMetrics.psi:type_name -> renice.infra.v1.Psi
-	1,  // 17: renice.infra.v1.ContainerMetrics.state:type_name -> renice.infra.v1.ContainerState
-	2,  // 18: renice.infra.v1.ContainerMetrics.health:type_name -> renice.infra.v1.ContainerHealth
-	18, // 19: renice.infra.v1.ContainerMetrics.created_at:type_name -> google.protobuf.Timestamp
-	18, // 20: renice.infra.v1.ContainerMetrics.started_at:type_name -> google.protobuf.Timestamp
-	3,  // 21: renice.infra.v1.ContainerEvent.type:type_name -> renice.infra.v1.ContainerEventType
-	2,  // 22: renice.infra.v1.ContainerEvent.health:type_name -> renice.infra.v1.ContainerHealth
-	18, // 23: renice.infra.v1.ContainerEvent.occurred_at:type_name -> google.protobuf.Timestamp
-	4,  // 24: renice.infra.v1.AgentService.Connect:input_type -> renice.infra.v1.ConnectRequest
-	5,  // 25: renice.infra.v1.AgentService.Connect:output_type -> renice.infra.v1.ConnectResponse
-	25, // [25:26] is the sub-list for method output_type
-	24, // [24:25] is the sub-list for method input_type
-	24, // [24:24] is the sub-list for extension type_name
-	24, // [24:24] is the sub-list for extension extendee
-	0,  // [0:24] is the sub-list for field type_name
+	7,  // 0: renice.infra.v1.ConnectRequest.hello:type_name -> renice.infra.v1.Hello
+	10, // 1: renice.infra.v1.ConnectRequest.report:type_name -> renice.infra.v1.Report
+	17, // 2: renice.infra.v1.ConnectRequest.container_event:type_name -> renice.infra.v1.ContainerEvent
+	8,  // 3: renice.infra.v1.ConnectRequest.host_info:type_name -> renice.infra.v1.HostInfo
+	20, // 4: renice.infra.v1.ConnectRequest.command_result:type_name -> renice.infra.v1.CommandResult
+	21, // 5: renice.infra.v1.ConnectRequest.command_output:type_name -> renice.infra.v1.CommandOutput
+	25, // 6: renice.infra.v1.ConnectRequest.probe_results:type_name -> renice.infra.v1.ProbeResults
+	9,  // 7: renice.infra.v1.ConnectResponse.welcome:type_name -> renice.infra.v1.Welcome
+	18, // 8: renice.infra.v1.ConnectResponse.report_ack:type_name -> renice.infra.v1.ReportAck
+	19, // 9: renice.infra.v1.ConnectResponse.command:type_name -> renice.infra.v1.Command
+	22, // 10: renice.infra.v1.ConnectResponse.cancel_command:type_name -> renice.infra.v1.CancelCommand
+	26, // 11: renice.infra.v1.ConnectResponse.probe_sync:type_name -> renice.infra.v1.ProbeSync
+	8,  // 12: renice.infra.v1.Hello.host_info:type_name -> renice.infra.v1.HostInfo
+	0,  // 13: renice.infra.v1.Hello.roles:type_name -> renice.infra.v1.AgentRole
+	27, // 14: renice.infra.v1.HostInfo.boot_time:type_name -> google.protobuf.Timestamp
+	27, // 15: renice.infra.v1.Welcome.server_time:type_name -> google.protobuf.Timestamp
+	27, // 16: renice.infra.v1.Report.sampled_at:type_name -> google.protobuf.Timestamp
+	11, // 17: renice.infra.v1.Report.host:type_name -> renice.infra.v1.HostMetrics
+	16, // 18: renice.infra.v1.Report.containers:type_name -> renice.infra.v1.ContainerMetrics
+	12, // 19: renice.infra.v1.HostMetrics.disks:type_name -> renice.infra.v1.DiskUsage
+	13, // 20: renice.infra.v1.HostMetrics.disk_io:type_name -> renice.infra.v1.DiskIO
+	14, // 21: renice.infra.v1.HostMetrics.net:type_name -> renice.infra.v1.NetMetrics
+	15, // 22: renice.infra.v1.HostMetrics.psi:type_name -> renice.infra.v1.Psi
+	1,  // 23: renice.infra.v1.ContainerMetrics.state:type_name -> renice.infra.v1.ContainerState
+	2,  // 24: renice.infra.v1.ContainerMetrics.health:type_name -> renice.infra.v1.ContainerHealth
+	27, // 25: renice.infra.v1.ContainerMetrics.created_at:type_name -> google.protobuf.Timestamp
+	27, // 26: renice.infra.v1.ContainerMetrics.started_at:type_name -> google.protobuf.Timestamp
+	3,  // 27: renice.infra.v1.ContainerEvent.type:type_name -> renice.infra.v1.ContainerEventType
+	2,  // 28: renice.infra.v1.ContainerEvent.health:type_name -> renice.infra.v1.ContainerHealth
+	27, // 29: renice.infra.v1.ContainerEvent.occurred_at:type_name -> google.protobuf.Timestamp
+	28, // 30: renice.infra.v1.Command.log_tail:type_name -> renice.infra.v1.LogTail
+	29, // 31: renice.infra.v1.Command.deploy:type_name -> renice.infra.v1.Deploy
+	30, // 32: renice.infra.v1.Command.build:type_name -> renice.infra.v1.Build
+	31, // 33: renice.infra.v1.Command.dns_list:type_name -> renice.infra.v1.DnsList
+	32, // 34: renice.infra.v1.Command.dns_add_a:type_name -> renice.infra.v1.DnsAddA
+	33, // 35: renice.infra.v1.Command.dns_set_a:type_name -> renice.infra.v1.DnsSetA
+	34, // 36: renice.infra.v1.Command.dns_delete:type_name -> renice.infra.v1.DnsDelete
+	4,  // 37: renice.infra.v1.CommandResult.status:type_name -> renice.infra.v1.CommandStatus
+	27, // 38: renice.infra.v1.CommandResult.finished_at:type_name -> google.protobuf.Timestamp
+	23, // 39: renice.infra.v1.CommandResult.deploy:type_name -> renice.infra.v1.DeployResult
+	35, // 40: renice.infra.v1.CommandResult.build:type_name -> renice.infra.v1.BuildResult
+	36, // 41: renice.infra.v1.CommandResult.dns_records:type_name -> renice.infra.v1.DnsRecords
+	37, // 42: renice.infra.v1.CommandResult.dns_change:type_name -> renice.infra.v1.DnsChange
+	38, // 43: renice.infra.v1.CommandOutput.lines:type_name -> renice.infra.v1.OutputLine
+	24, // 44: renice.infra.v1.DeployResult.containers:type_name -> renice.infra.v1.DeployedContainer
+	2,  // 45: renice.infra.v1.DeployedContainer.health:type_name -> renice.infra.v1.ContainerHealth
+	5,  // 46: renice.infra.v1.AgentService.Connect:input_type -> renice.infra.v1.ConnectRequest
+	6,  // 47: renice.infra.v1.AgentService.Connect:output_type -> renice.infra.v1.ConnectResponse
+	47, // [47:48] is the sub-list for method output_type
+	46, // [46:47] is the sub-list for method input_type
+	46, // [46:46] is the sub-list for extension type_name
+	46, // [46:46] is the sub-list for extension extendee
+	0,  // [0:46] is the sub-list for field type_name
 }
 
 func init() { file_renice_infra_v1_agent_proto_init() }
@@ -2004,23 +2884,50 @@ func file_renice_infra_v1_agent_proto_init() {
 	if File_renice_infra_v1_agent_proto != nil {
 		return
 	}
+	file_renice_infra_v1_build_proto_init()
+	file_renice_infra_v1_common_proto_init()
+	file_renice_infra_v1_deploy_proto_init()
+	file_renice_infra_v1_dns_proto_init()
+	file_renice_infra_v1_logs_proto_init()
+	file_renice_infra_v1_probe_proto_init()
 	file_renice_infra_v1_agent_proto_msgTypes[0].OneofWrappers = []any{
 		(*ConnectRequest_Hello)(nil),
 		(*ConnectRequest_Report)(nil),
 		(*ConnectRequest_ContainerEvent)(nil),
 		(*ConnectRequest_HostInfo)(nil),
+		(*ConnectRequest_CommandResult)(nil),
+		(*ConnectRequest_CommandOutput)(nil),
+		(*ConnectRequest_ProbeResults)(nil),
 	}
 	file_renice_infra_v1_agent_proto_msgTypes[1].OneofWrappers = []any{
 		(*ConnectResponse_Welcome)(nil),
 		(*ConnectResponse_ReportAck)(nil),
+		(*ConnectResponse_Command)(nil),
+		(*ConnectResponse_CancelCommand)(nil),
+		(*ConnectResponse_ProbeSync)(nil),
+	}
+	file_renice_infra_v1_agent_proto_msgTypes[14].OneofWrappers = []any{
+		(*Command_LogTail)(nil),
+		(*Command_Deploy)(nil),
+		(*Command_Build)(nil),
+		(*Command_DnsList)(nil),
+		(*Command_DnsAddA)(nil),
+		(*Command_DnsSetA)(nil),
+		(*Command_DnsDelete)(nil),
+	}
+	file_renice_infra_v1_agent_proto_msgTypes[15].OneofWrappers = []any{
+		(*CommandResult_Deploy)(nil),
+		(*CommandResult_Build)(nil),
+		(*CommandResult_DnsRecords)(nil),
+		(*CommandResult_DnsChange)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_renice_infra_v1_agent_proto_rawDesc), len(file_renice_infra_v1_agent_proto_rawDesc)),
-			NumEnums:      4,
-			NumMessages:   14,
+			NumEnums:      5,
+			NumMessages:   20,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

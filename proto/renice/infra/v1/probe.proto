@@ -1,0 +1,140 @@
+syntax = "proto3";
+
+package renice.infra.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// ProbeSync 是服务端在 welcome 后立即发送、任务增删改时再次发送的全量期望状态。
+// agent 整体替换任务表：删除的停止、新增的启动、修改的按新配置重来；空列表停止全部探测。
+// HTTP/TCP 只派给开启 PROBER 的 agent，agent 也自检；中间件探测不需要额外角色。
+// 角色不符时不执行该任务，以失败 ProbeResult 回报「本机没有开启 PROBER 角色」，不影响同批其他任务。
+message ProbeSync {
+  // 本机应执行的全部任务，替换前一份配置。例：[{id: "mw-3", kind: PROBE_KIND_POSTGRES, interval_seconds: 30, timeout_seconds: 10}]
+  repeated ProbeTask tasks = 1;
+}
+
+// ProbeTask 是服务端交给 agent 周期执行的一项探测，不走 Command，也不产生 CommandResult。
+message ProbeTask {
+  // 服务端的任务 ID，结果通过它关联。例："probe-12"、"mw-3"
+  string id = 1;
+  // 探测类型，必须与 target 对应；未指定或不支持的类型不执行，以失败结果说明原因。例：PROBE_KIND_HTTP
+  ProbeKind kind = 2;
+  // 相邻两次探测的间隔，单位秒，必须大于 0。例：30
+  int32 interval_seconds = 3;
+  // 单次探测总超时，单位秒，必须大于 0；超时报失败结果。例：10
+  int32 timeout_seconds = 4;
+  // 探测目标：HTTP/TCP 与对应类型匹配，其余中间件类型使用 middleware。
+  oneof target {
+    // HTTP(S) 探测目标。例：{url: "https://renice.cc/healthz"}
+    HttpTarget http = 10;
+    // TCP 探测目标。例：{address: "renice-main:443"}
+    TcpTarget tcp = 11;
+    // 中间件协议探测目标，由所在主机本机执行。例：{addresses: ["127.0.0.1:5432"], database: "postgres"}
+    MiddlewareTarget middleware = 12;
+  }
+}
+
+// ProbeKind 是 agent 支持的探测类型。
+enum ProbeKind {
+  // 未指定，不执行探测并回报失败原因。
+  PROBE_KIND_UNSPECIFIED = 0;
+  // HTTP 或 HTTPS，检查状态码、关键词并获取证书到期时间。
+  PROBE_KIND_HTTP = 1;
+  // TCP，检查目标端口能否建立连接。
+  PROBE_KIND_TCP = 2;
+  // PostgreSQL 单体，协议探活并采集连接和容量指标。
+  PROBE_KIND_POSTGRES = 3;
+  // MySQL 单体，协议探活并采集连接和容量指标。
+  PROBE_KIND_MYSQL = 4;
+  // Redis 单体，协议探活并采集内存、键和吞吐指标。
+  PROBE_KIND_REDIS = 5;
+  // Redis 哨兵，通过哨兵找到当前 master 并采集 Redis 指标。
+  PROBE_KIND_REDIS_SENTINEL = 6;
+  // RabbitMQ，通过 AMQP 探活、management API 采集队列指标。
+  PROBE_KIND_RABBITMQ = 7;
+  // Kafka 单体，协议探活并采集消费积压和 topic 信息。
+  PROBE_KIND_KAFKA = 8;
+}
+
+// HttpTarget 是一次 HTTP(S) 探测的配置；https 的结果带证书到期时间。
+message HttpTarget {
+  // 完整 URL。例："https://renice.cc/healthz"
+  string url = 1;
+  // 期望的状态码，0 表示任意 2xx 都算通过。例：200
+  int32 expect_status = 2;
+  // 响应体必须包含的关键词，空字符串表示不检查。例："ok"
+  string keyword = 3;
+  // 是否跳过 TLS 证书校验，默认 false。例：false
+  bool skip_tls_verify = 4;
+}
+
+// TcpTarget 是一次 TCP 连接探测的配置。
+message TcpTarget {
+  // 目标地址，格式 host:port。例："renice-main:443"
+  string address = 1;
+}
+
+// MiddlewareTarget 是中间件协议探测配置；凭据只在 agent 内存中使用，不写磁盘、不打日志、不出现在 CommandOutput 中。
+message MiddlewareTarget {
+  // 单体填一个地址，Redis 哨兵填哨兵地址列表。例：["127.0.0.1:26379", "127.0.0.1:26380"]
+  repeated string addresses = 1;
+  // 中间件用户名，只在内存中使用，不写磁盘、不打日志、不出现在 CommandOutput 中。例："renice_monitor"
+  string username = 2;
+  // 中间件密码，只在内存中使用，不写磁盘、不打日志、不出现在 CommandOutput 中。例："<中间件密码>"
+  string password = 3;
+  // PostgreSQL/MySQL 连接的库，空表示该类型默认库。例："postgres"
+  string database = 4;
+  // Redis 哨兵的 master 名称。例："mymaster"
+  string sentinel_master = 5;
+  // RabbitMQ management API 地址。例："http://127.0.0.1:15672"
+  string management_url = 6;
+  // 是否使用 TLS 连接中间件。例：false
+  bool tls = 7;
+}
+
+// ProbeResults 是 agent 把一秒内完成的探测结果攒成的一批。
+// 断线期间结果直接丢弃、不补传；服务端 uptime 只按有结果的探测计算，断线期间不计入分母。
+message ProbeResults {
+  // 这一秒完成的结果。例：[{task_id: "probe-12", ok: true, latency_ms: 12.5}]
+  repeated ProbeResult results = 1;
+}
+
+// ProbeResult 是 agent 一次探测的结果，失败也要回报，不影响其他任务。
+message ProbeResult {
+  // 对应 ProbeTask 的 ID。例："probe-12"
+  string task_id = 1;
+  // 本次探测完成的时间。例：2026-10-31T16:20:00+08:00
+  google.protobuf.Timestamp checked_at = 2;
+  // 探测是否通过。例：false
+  bool ok = 3;
+  // 本次探测耗时，单位毫秒。例：12.5
+  double latency_ms = 4;
+  // 失败时填写中文原因或原始错误，须去除凭据；成功时为空。例："状态码 502，期望 2xx"
+  string error = 5;
+  // HTTP 实际状态码，仅 HTTP 探测有意义，未拿到响应时为 0。例：502
+  int32 http_status = 6;
+  // HTTPS 的证书到期时间；非 HTTPS 或未取得证书时不带。例：2027-01-01T00:00:00Z
+  google.protobuf.Timestamp cert_not_after = 7;
+  // 自动探测到的中间件版本，非中间件或获取失败时为空。例："PostgreSQL 18.0"
+  string version = 8;
+  // 关键指标白名单（服务端只把名单内的指标写入 VictoriaMetrics，其余丢弃）：
+  // PostgreSQL：connections、max_connections、db_size_bytes{db}；
+  // MySQL：connections（Threads_connected）、max_connections、db_size_bytes{db}；
+  // Redis/哨兵：used_memory_bytes、maxmemory_bytes、keys（全部 db 的 key 总数）、ops_per_sec；
+  // RabbitMQ：queue_messages{vhost,queue}、queue_consumers{vhost,queue}；Kafka：consumer_lag{group,topic}。
+  // 例：[{name: "db_size_bytes", labels: {db: "renice_sso"}, value: 8388608}]
+  repeated Sample samples = 9;
+  // 非数字信息：哨兵当前 master 用 master 键，Kafka topic 列表用 topics 键（逗号分隔）。
+  // 例：{master: "10.0.0.5:6379"}、{topics: "orders,events"}
+  map<string, string> info = 10;
+}
+
+// Sample 是一个关键指标采样值，名称和标签遵循 ProbeResult.samples 的白名单。
+message Sample {
+  // 指标名。例："db_size_bytes"
+  string name = 1;
+  // 指标标签，无标签指标用空映射。例：{db: "renice_sso"}
+  map<string, string> labels = 2;
+  // 采样数值，单位由指标名决定。例：8388608
+  double value = 3;
+}

@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package renice.infra.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// RegistryAuth 是构建或发布时服务端下发的镜像仓库凭据；agent 只在本次任务内存中使用。
+// 不写磁盘（包括 Docker 登录配置）、不打日志、不出现在 CommandOutput 中。
+message RegistryAuth {
+  // 仓库地址，不带镜像路径。例："registry.renice.cc"
+  string server = 1;
+  // 登录用户名；只在内存里使用，不写磁盘、不打日志、不出现在 CommandOutput 中。例："renice-builder"
+  string username = 2;
+  // 登录密码或 token；只在内存里使用，不写磁盘、不打日志、不出现在 CommandOutput 中。例："<仓库密码>"
+  string password = 3;
+}
+
+// OutputLine 是 agent 实时回传的一行日志或进度；本地不保存命令输出。
+message OutputLine {
+  // 这一行产生的时间。例：2026-10-31T16:20:00+08:00
+  google.protobuf.Timestamp at = 1;
+  // 输出来源，区分容器或构建进程的输出和 agent 自己的进度。例：OUTPUT_STREAM_SYSTEM
+  OutputStream stream = 2;
+  // 一行文本，不含换行符；超过 16 KiB 时截断，含末尾的「…（已截断）」在内不超过 16 KiB，保留完整 UTF-8 字符。
+  // 例："正在拉取 registry.renice.cc/renice-sso-server:v0.1.0"
+  string text = 3;
+}
+
+// OutputStream 是一行输出的来源。
+enum OutputStream {
+  // 未指定来源，发送方应明确指定来源。
+  OUTPUT_STREAM_UNSPECIFIED = 0;
+  // 被执行进程或容器的标准输出。
+  OUTPUT_STREAM_STDOUT = 1;
+  // 被执行进程或容器的标准错误输出。
+  OUTPUT_STREAM_STDERR = 2;
+  // agent 自己写的进度说明，例如「正在拉取镜像」。
+  OUTPUT_STREAM_SYSTEM = 3;
+}

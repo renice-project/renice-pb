@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package renice.infra.v1;
+
+import "renice/infra/v1/common.proto";
+
+// Build 是服务端下发的构建命令，默认总超时 1800 秒。
+// 只派给开启 BUILDER 的 agent，agent 也自检，角色不符 → REJECTED「本机没有开启 BUILDER 角色」。
+// 同一时刻只执行一个构建，第二个 → REJECTED「已有构建在跑」。
+// 用只读 token 通过 HTTPS 拉仓库，checkout 指定 commit，构建并推送全部镜像；日志走 CommandOutput。
+// 工作目录在结束、失败、取消、超时或断线后删除；凭据只在内存里使用，不缓存 token。
+// 构建或推送失败 → FAILED 并给出原因；断线时停止构建，不回结果、不补传。
+message Build {
+  // GitHub 仓库 HTTPS 地址。例："https://github.com/renice-project/renice-sso.git"
+  string repo_url = 1;
+  // 要 checkout 的完整 40 位提交哈希。例："1234567890abcdef1234567890abcdef12345678"
+  string commit = 2;
+  // HTTPS clone 使用的只读 token，只在内存中使用，不写磁盘、不打日志、不出现在 CommandOutput 中。例："<GitHub 只读 token>"
+  string git_token = 3;
+  // 镜像 tag 和传给构建的版本号，dev 用短 hash，main 用 semver tag。例："1a2b3c4"、"v0.1.0-alpha.4"
+  string version = 4;
+  // 发布单元的全部镜像。例：[{name: "server", dockerfile: "server/Dockerfile", context: ".", image: "registry.renice.cc/renice-sso-server:1a2b3c4"}]
+  repeated BuildImage images = 5;
+  // Docker 构建参数。例：{VERSION: "v0.1.0-alpha.4"}
+  map<string, string> build_args = 6;
+  // 镜像推送凭据，只在内存中使用，不写磁盘、不打日志、不出现在 CommandOutput 中。例：{server: "registry.renice.cc", username: "renice-builder", password: "<仓库密码>"}
+  RegistryAuth registry = 7;
+  // cgroup CPU 上限，占本机总核数的百分比，0 表示默认 50。例：50
+  int32 cpu_percent = 8;
+}
+
+// BuildImage 是构建单元里一个镜像的构建配置。
+message BuildImage {
+  // 发布单元内的镜像名。例："server"
+  string name = 1;
+  // 相对仓库根目录的 Dockerfile 路径。例："server/Dockerfile"
+  string dockerfile = 2;
+  // 相对仓库根目录的构建上下文。例："."
+  string context = 3;
+  // 完整目标镜像地址和 tag。例："registry.renice.cc/renice-sso-server:1a2b3c4"
+  string image = 4;
+}
+
+// BuildResult 是构建结束时随 CommandResult 回传的产物和耗时。
+message BuildResult {
+  // 已成功推送的镜像；失败时可带部分产物，但整个发布单元不得视为构建成功。例：[{name: "server", image: "registry.renice.cc/renice-sso-server:1a2b3c4", digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}]
+  repeated BuiltImage images = 1;
+  // 构建总耗时，单位秒。例：123.5
+  double duration_seconds = 2;
+}
+
+// BuiltImage 是已推送到 registry 的一个构建产物。
+message BuiltImage {
+  // 发布单元内的镜像名。例："server"
+  string name = 1;
+  // 推送的完整镜像地址和 tag。例："registry.renice.cc/renice-sso-server:1a2b3c4"
+  string image = 2;
+  // registry 返回的镜像摘要。例："sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  string digest = 3;
+}
