@@ -1,0 +1,665 @@
+syntax = "proto3";
+
+package renice.judge.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// JudgeService 是 renice-oj 的服务端给判题机（renice-judge 仓库里的 judgehost 守护进程）用的接口。
+//
+// 总体模型：判题机只主动连服务端，服务端从不连判题机；判题机不碰 renice-oj 的数据库。
+// 一台评测机器跑一个 judgehost 容器，容器里每个评测核是一个槽位（slot），各自领任务、各自回报。
+// 一个任务 = 一份评测里的一个测试点（或者一次自定义运行）。
+//
+// 鉴权：每次调用都在 gRPC metadata 里带 `authorization: Bearer <机器令牌>`。令牌在管理端「添加机器」时生成，
+// 一台机器一个，服务端只存它的 SHA-256。没带、不存在或已吊销 → UNAUTHENTICATED，judgehost 打印错误后以退出码 78 退出。
+//
+// 会话：Hello 以 instance_id 区分进程启动，返回 session_generation。除 Hello 外的每次调用都必须在
+// metadata 带 `x-judge-session-generation: <正整数十进制代次>`，包括 FetchBlob；缺失或格式错误 → INVALID_ARGUMENT。
+// 服务端在机器级锁内校验当前代次，再修改心跳、槽位或任务；旧代次 → FAILED_PRECONDITION「会话已失效」。
+// 旧进程收到此错误必须停掉全部运行并退出，不得自动生成新 instance_id 抢回会话；同一进程网络重连沿用原代次。
+// 机器登记数据丢失 → FAILED_PRECONDITION「机器未登记」，当前进程可用原 instance_id 重新 Hello。
+//
+// 调用顺序：
+// 1. 启动时调一次 Hello，上报机器信息、自检结果和槽位，拿到每个槽位的 slot_id。
+// 2. 之后每 heartbeat_interval_seconds 秒调一次 Heartbeat（整机一次，带上所有槽位的状态），顺便拿到「应该持有的文件集合」做预热。
+// 3. 每个空闲槽位循环调 ClaimTask（长轮询）领任务。
+// 4. 跑任务期间每 lease_renew_seconds 秒调一次 RenewLease 续约；续约返回 cancelled=true 时立刻停掉这个任务，不用回报。
+// 5. 跑完调 ReportResult 回报。
+// 6. 缺文件时用 FetchBlob 按 sha256 流式拉取，拉完自己校验摘要。
+//
+// 业务例子：renice-main 上的 judgehost 用 --cpus 6,7 启动，Hello 拿到 slot_id 11、12；
+// 槽位 11 领到「提交 1024 的第 3 个数据点」，跑完回报 AC、37 ms、3.2 MiB。
+service JudgeService {
+  // Hello 是判题机启动后的第一次调用：上报机器信息、各槽位、自检结果和支持的语言，服务端登记后返回每个槽位的 slot_id 和运行参数。
+  //
+  // 每次进程启动生成一个随机 UUID instance_id，重试 Hello 时保持不变且请求内容相同。
+  // expected_session_generation 是 judgehost 在持久化卷上保存的最近一次成功登记代次；首次登记为 0。
+  // 新 instance_id 仅当该值等于服务端当前代次时才可登记，并原子地将代次加 1；不相等 → FAILED_PRECONDITION「登记代次冲突」，不得自动改值重试。
+  // 同时发出的新旧 Hello 只有一个能以同一预期代次成功，后到者必须失败，不能撤销先登记会话或回收其任务。
+  // 首次发送前须持久化 pending instance_id、预期代次和请求内容；成功响应的 session_generation 必须先持久化再启动心跳和领任务。
+  // 响应丢失或进程崩溃后的同一登记重试沿用全部原值，不得换 instance_id 或自动刷新预期代次。
+  // 持久化卷丢失或服务端数据恢复导致代次不匹配时必须停止并由管理员恢复登记状态，不得降级为 0 或读取较新代次后自动重试。
+  // 服务端持久化 (机器, instance_id) 的登记结果和是否已被替代；记录保留到机器被删除。
+  // 当前 instance_id 的重试返回原 session_generation 和槽位映射，不回收任务、不增加代次；内容不同 → INVALID_ARGUMENT。
+  // 已被替代的 instance_id 再次 Hello → FAILED_PRECONDITION「会话已失效」，不得重新激活。
+  // 从未登记的新 instance_id：在机器级锁内比较 expected_session_generation 与当前持久化代次；相等才原子增加代次、替换当前会话并只回收旧会话的 leased 任务，
+  // 按 (机器, cpu) 复用 slot_id；此锁也覆盖其他调用的会话校验与写入，避免旧请求越过换代提交。
+  // 代次在服务端重启后仍单调递增且不复用；若机器数据重建也必须分配更大的代次。
+  // Hello 响应丢失后重试返回同一代次，不能撤销本会话后来领到的任务。
+  //
+  // 错误码：
+  // - 自检里有 fatal=true 且 ok=false 的项 → FAILED_PRECONDITION，信息里列出没通过的项；judgehost 以退出码 78 退出。
+  // - instance_id 不是 UUID、slots 为空、cpu 重复 → INVALID_ARGUMENT。
+  //
+  // 验收例：旧进程 A 与新进程 B 的首次 Hello 都带预期代次 8；B 先登记得 9 并领到任务后，A 的延迟 Hello 因当前代次已是 9 而拒绝，B 的代次、任务 token 和到期时间不变。
+  // 业务例子：renice-main 的容器重启后再次 Hello，服务端把它刚才没回报完的 2 个任务放回队列，返回 slot_id 11、12。
+  rpc Hello(HelloRequest) returns (HelloResponse);
+
+  // Heartbeat 是整机心跳：上报各槽位状态、缓存占用和预热进度；返回各槽位是否被停用，以及最新的「应该持有的文件集合」。
+  //
+  // 服务端超过 3 个心跳周期（默认 30 秒）没收到心跳，就把这台机器标为离线，并把它领走的任务放回队列。
+  // 离线后再来的心跳会让它重新上线，不用重新 Hello；但被放回队列的任务已经不属于它，回报会被拒（见 ReportResult）。
+  //
+  // 错误码：机器未登记 → FAILED_PRECONDITION「机器未登记」；旧会话 → FAILED_PRECONDITION「会话已失效」。
+  // 只有当前会话的心跳能让机器重新上线，旧心跳不得刷新在线时间或槽位状态。
+  //
+  // 业务例子：管理员点了 akcup2027 的「预热」，下一次心跳就返回 pin_set（版本 7，共 64 个文件），judgehost 在后台拉齐，
+  // 之后每次心跳上报进度 41 / 64。
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+
+  // ClaimTask 给一个空闲槽位领一个任务，长轮询：队列里没有任务时，服务端最多挂起 wait_seconds 秒，有新任务入队会立刻唤醒。
+  // 超时仍然没有任务就返回一个不带 task 的空响应，judgehost 立刻再调一次。
+  //
+  // 领走的同时生成租约：lease_token 是全局单调递增的 fencing token，之后的续约和回报都必须带它。
+  // 一个槽位同一时间只能持有一个任务：同一当前会话的新领任务请求会先把该槽位旧任务放回队列（视为丢了）。
+  // request_id 是本会话内一次逻辑领任务的 UUID；响应丢失重试必须原样复用它，不能生成新 ID。
+  // 服务端按 (机器, session_generation, request_id) 合并并发重试并保存原响应直到会话结束；参数改变 → INVALID_ARGUMENT。
+  // 重试返回原 task/token/到期时间或原空响应，不重新分配、不回收后续任务、不续约；空响应后下一轮使用新 ID。
+  // 每槽位只允许一个未确定响应的逻辑请求，确认后才能用新 ID 领下一任务。
+  // 长轮询在挂起前及每次唤醒实际分配前，都须在同一机器级锁内重新校验代次；旧会话先拒绝，不能碰新会话租约。
+  // 验收例：旧代次 8 挂起 → 新 Hello 得代次 9 → 新进程领到 B → 旧轮询唤醒被拒，B 的 token 和到期时间不变。
+  //
+  // 错误码：slot_id 不属于这台机器 → PERMISSION_DENIED；槽位被管理员停用 → FAILED_PRECONDITION（judgehost 让这个槽位歇着，等心跳里重新启用）。
+  //
+  // 业务例子：槽位 12 调 ClaimTask(wait_seconds=25)，等了 3 秒后有人交了 A+B，拿到 task_id 88001、lease_token 5003。
+  rpc ClaimTask(ClaimTaskRequest) returns (ClaimTaskResponse);
+
+  // RenewLease 给正在跑的任务续约，把租约到期时间设置为锁定校验时的服务端当前时间 + lease_seconds。
+  //
+  // 判定顺序：先鉴权、校验当前会话；按机器锁 → 任务行锁的固定顺序加锁，锁内先校验任务所属机器、会话和 token。
+  // 不属于本机器 → PERMISSION_DENIED；所属会话或 token 不匹配 → FAILED_PRECONDITION「租约已失效」。
+  // 身份匹配后，cancelled 优先返回 cancelled=true（不检查到期时间、不续约），响应不带 lease_expires_at。
+  // 其余情况必须 state=leased 且服务端当前时间严格早于 lease_expires_at 才能续约；done、queued、恰好到期及过期均拒绝。
+  // 当前时间取锁全部拿到后的实时时钟（PG clock_timestamp()），不能用事务开始时的 now()，不依赖后台回收是否运行。
+  // 续约、首次回报、回收和取消须使用同样的锁顺序串行判定；取消保留原机器、会话及 token 供身份校验。
+  // 返回 cancelled 或 FAILED_PRECONDITION 时，judgehost 立刻停掉本次运行，不再回报，槽位回到空闲。
+  //
+  // 验收例：到期时间 14:00:30，14:00:29 续约可延至 14:00:59；14:00:30 和 14:00:31 即使回收未运行也拒绝。
+  //
+  // 业务例子：一个 Java 数据点跑了 12 秒（编译 4 秒 + 运行 8 秒），期间续约了 1 次。
+  rpc RenewLease(RenewLeaseRequest) returns (RenewLeaseResponse);
+
+  // ReportResult 回报一个任务的结果。
+  //
+  // 判定顺序：先鉴权及当前会话校验，再按机器锁 → 任务行锁加锁，校验任务所属机器、会话、slot_id 和 token。
+  // 不属于本机器或槽位 → PERMISSION_DENIED；所属会话或 token 不匹配 → FAILED_PRECONDITION「租约已失效」。
+  // 身份匹配后依次处理：
+  // 1. done 且此 token 已成功写入回报 → accepted=true、duplicate=true，不重新校验结果体、不检查到期时间、不重复写入。
+  // 2. cancelled → accepted=false、duplicate=false，不检查到期时间、不写结果；取消保留原租约身份，重复调用仍返回此值。
+  // 3. 其余必须 state=leased 且锁全部拿到后的服务端实时时钟严格早于 lease_expires_at；否则租约已失效。
+  // 4. 校验结果体、写入结果并改 done，在同一事务提交后返回 accepted=true、duplicate=false。
+  // done 的租约身份和幂等结果保留到任务被删除；后台回收不能清理 done/cancelled 的 token。
+  // 因此「写入成功但响应丢失」在同一会话内的重试即使过了原到期时间仍幂等；换代后旧会话先被拒绝。
+  //
+  // 验收例：到期 14:00:30，14:00:29 首次回报成功，14:00:31 重试返回 duplicate；
+  // 尚未回报的任务在 14:00:30 或 14:00:31 首次回报均拒绝，即使 token 未变且回收未运行。
+  // 同 token 的任务已取消时，14:00:31 续约返回 cancelled，回报返回 accepted=false；不同 token 先拒绝。
+  //
+  // 错误码：
+  // - 身份不匹配或首次回报的租约已到期（即使 token 未变）→ FAILED_PRECONDITION「租约已失效」，judgehost 丢掉结果。
+  // - 任务已经被取消 → 返回成功但 accepted=false（结果不入库），judgehost 不用重试。
+  // - 首次有效回报缺 run → INVALID_ARGUMENT（不消费租约，可补齐后在到期前重试）。
+  //
+  // 业务例子：槽位 11 回报 task_id 88001：编译成功（命中编译缓存）、AC、1 ms、0.6 MiB。
+  rpc ReportResult(ReportResultRequest) returns (ReportResultResponse);
+
+  // FetchBlob 按 sha256 流式拉取一个文件（测试数据、标准答案、checker 源码、自定义输入）。
+  // 第一条响应带文件总大小，之后每条最多 1 MiB，按顺序拼起来就是完整文件；judgehost 拉完自己算 sha256 校验，对不上就丢弃重拉。
+  //
+  // 错误码：digest 格式不对 → INVALID_ARGUMENT；服务端没有这个文件 → NOT_FOUND。
+  //
+  // 业务例子：预热 test-006 时拉 200 MiB 的输入文件，共 200 条响应。
+  rpc FetchBlob(FetchBlobRequest) returns (stream FetchBlobResponse);
+}
+
+// HelloRequest 是 Hello 的入参。
+message HelloRequest {
+  // judgehost 的版本号（renice-judge 仓库的 VERSION）。例："alpha.1"
+  string version = 1;
+  // 机器信息。
+  // 例：{hostname: "renice-main", cpu_count: 8}（其余容量和内核字段也按实际填写）。
+  MachineInfo machine = 2;
+  // 这个容器管理的全部评测核，一核一项，cpu 不能重复。例：renice-main 传 cpu 6 和 7 两项。
+  repeated SlotInfo slots = 3;
+  // 启动自检的每一项结果。服务端原样存下来给管理端看；有 fatal=true 且 ok=false 的项时拒绝上线。
+  // 例：[{name: "cgroup_writable", ok: true, fatal: true}]。
+  repeated SelfCheck self_checks = 4;
+  // 判题机镜像里实际装好的语言和版本。服务端只给它派这里列出的语言。
+  // 例：[{code: "cpp23", version: "g++ 14.2.0"}]。
+  repeated LanguageInfo languages = 5;
+  // 本次进程启动的随机 UUID；同次启动的 Hello 重试保持不变，新进程生成新值。例："b912b956-84d4-4534-a87d-559946868812"
+  string instance_id = 6;
+  // 本机持久化的最近一次成功 session_generation；首次安装填 0，新 instance_id 登记时作为比较并交换的预期值。例：8（服务端当前代次也是 8）
+  int64 expected_session_generation = 7;
+}
+
+// HelloResponse 是 Hello 的出参。
+message HelloResponse {
+  // 这台机器在服务端的 ID。例：3
+  int64 machine_id = 1;
+  // 每个槽位分到的 slot_id，和请求里的 slots 一一对应（按 cpu 匹配）。
+  // 例：[{cpu: 6, slot_id: 11, enabled: true}]。
+  repeated SlotAssignment slots = 2;
+  // 多少秒发一次 Heartbeat。例：10
+  int32 heartbeat_interval_seconds = 3;
+  // 一次续约把租约延长多少秒。例：30
+  int32 lease_seconds = 4;
+  // 多少秒续约一次，一定小于 lease_seconds。例：10
+  int32 lease_renew_seconds = 5;
+  // ClaimTask 的 wait_seconds 最大能填多少。例：25
+  int32 max_claim_wait_seconds = 6;
+  // 服务端分配的会话代次，后续调用在 metadata 的 x-judge-session-generation 原样携带。例：9
+  int64 session_generation = 7;
+}
+
+// MachineInfo 是评测机器的静态信息。
+message MachineInfo {
+  // 主机名。例："renice-main"
+  string hostname = 1;
+  // 内核版本（uname -r）。例："6.12.38+deb13-amd64"
+  string kernel = 2;
+  // CPU 型号。例："AMD Ryzen 9 9950X 16-Core Processor"
+  string cpu_model = 3;
+  // 机器的逻辑核数。例：8
+  int32 cpu_count = 4;
+  // 物理内存总量，字节。例：7516192768（7 GiB）
+  int64 mem_total_bytes = 5;
+  // 磁盘缓存的容量上限，字节（启动参数 --cache-max-gb）。例：21474836480（20 GiB）
+  int64 cache_max_bytes = 6;
+}
+
+// SlotInfo 是一个评测核（槽位）的信息。
+message SlotInfo {
+  // 绑定的逻辑核编号，已经在 cpuset.cpus.effective 里核对过。例：6
+  int32 cpu = 1;
+  // 这个槽位跑选手程序用的 uid，每个槽位独立。例：60006
+  int32 uid = 2;
+  // 和这个核共用同一个物理核的超线程兄弟（从 /sys/devices/system/cpu/cpuN/topology/thread_siblings_list 读），没有就为空。
+  // 例：[14]（9950X 物理机上 6 和 14 是兄弟）；虚拟机上通常为空。
+  repeated int32 smt_siblings = 3;
+}
+
+// SlotAssignment 是服务端给一个槽位分配的身份。
+message SlotAssignment {
+  // 对应的逻辑核编号。例：6
+  int32 cpu = 1;
+  // 服务端给这个槽位的 ID，之后 ClaimTask、Heartbeat 都用它。例：11
+  int64 slot_id = 2;
+  // 这个槽位当前是否启用。管理员停用后为 false，judgehost 不为它领任务。例：true
+  bool enabled = 3;
+}
+
+// SelfCheck 是启动自检的一项结果。
+message SelfCheck {
+  // 检查项名称。例："cpuset_effective"
+  string name = 1;
+  // 是否通过。例：true
+  bool ok = 2;
+  // 没通过时是否致命（致命的项没通过，服务端拒绝这台机器上线）。例：true（cgroup 不可写是致命的）；false（exception-trace 没关只是警告）
+  bool fatal = 3;
+  // 给人看的说明。例："cpu 6,7 都在 cpuset.cpus.effective（0-7）里"
+  string message = 4;
+}
+
+// LanguageInfo 是判题机支持的一种语言。
+message LanguageInfo {
+  // 语言代号，和 renice-oj 的语言代号一致：c、cpp17、cpp20、cpp23、java、go、pypy3。例："cpp23"
+  string code = 1;
+  // 编译器或运行时的版本（`--version` 的第一行）。例："g++ (Debian 14.2.0-19) 14.2.0"
+  string version = 2;
+}
+
+// HeartbeatRequest 是 Heartbeat 的入参。
+message HeartbeatRequest {
+  // 每个槽位的当前状态。
+  // 例：[{slot_id: 11, state: SLOT_STATE_BUSY, current_task_id: 88001}]。
+  repeated SlotStatus slots = 1;
+  // 磁盘缓存的情况。
+  // 例：{used_bytes: 3221225472, max_bytes: 21474836480, entries: 1532}。
+  CacheStatus cache = 2;
+  // 预热进度；还没收到过 pin_set 时不填。
+  // 例：{pin_set_version: 7, files_ready: 41, files_total: 64}；未开始预热时省略。
+  PrewarmStatus prewarm = 3;
+  // judgehost 目前持有的 pin_set 版本；服务端版本更新时才在响应里带完整的 pin_set。还没有时填 0。例：7
+  int64 pin_set_version = 4;
+}
+
+// SlotStatus 是一个槽位在心跳时的状态。
+message SlotStatus {
+  // 槽位 ID。例：11
+  int64 slot_id = 1;
+  // 状态。
+  // 例：SLOT_STATE_BUSY（槽位 11 正在评测）。
+  SlotState state = 2;
+  // 正在跑的任务 ID，空闲时为 0。例：88001
+  int64 current_task_id = 3;
+  // 槽位出错时的说明，其余为空。例："cgroup judge/slot-6 创建失败：Device or resource busy"
+  string error = 4;
+}
+
+// SlotState 是槽位的状态。
+enum SlotState {
+  // 未指定，服务端按 SLOT_STATE_ERROR 处理。
+  SLOT_STATE_UNSPECIFIED = 0;
+  // 空闲，正在长轮询领任务。例：刚启动、刚回报完。
+  SLOT_STATE_IDLE = 1;
+  // 正在跑任务。例：正在跑提交 1024 的第 3 个点。
+  SLOT_STATE_BUSY = 2;
+  // 被管理员停用，不领任务。例：核 7 上要跑别的压测，先停掉。
+  SLOT_STATE_DISABLED = 3;
+  // 槽位自己出错，暂时不领任务（judgehost 会周期性重试恢复）。例：cgroup 创建失败。
+  SLOT_STATE_ERROR = 4;
+}
+
+// CacheStatus 是整机共用的磁盘缓存的占用情况。
+message CacheStatus {
+  // 已用字节数。例：3221225472（3 GiB）
+  int64 used_bytes = 1;
+  // 容量上限，字节。例：21474836480（20 GiB）
+  int64 max_bytes = 2;
+  // 缓存里的文件数（测试数据和编译产物合计）。例：1532
+  int64 entries = 3;
+}
+
+// PrewarmStatus 是预热进度。
+message PrewarmStatus {
+  // 这是哪个版本的 pin_set 的进度。例：7
+  int64 pin_set_version = 1;
+  // 已经在本地的文件数。例：41
+  int32 files_ready = 2;
+  // pin_set 里的文件总数。例：64
+  int32 files_total = 3;
+  // 已经在本地的字节数。例：734003200（700 MiB）
+  int64 bytes_ready = 4;
+  // pin_set 里的字节总数。例：1073741824（1 GiB）
+  int64 bytes_total = 5;
+  // 已经编译好的 checker、交互器、manager 个数。例：3
+  int32 programs_ready = 6;
+  // 需要编译的 checker、交互器、manager 总数。例：4
+  int32 programs_total = 7;
+  // 出错的项（拉取失败、编译失败），每项一句话；没有就为空。例：["test-004 交互器编译失败：interactor.cpp:12: error: ..."]
+  repeated string errors = 8;
+}
+
+// HeartbeatResponse 是 Heartbeat 的出参。
+message HeartbeatResponse {
+  // 每个槽位当前是否启用（管理员可能刚停用或启用了某个核）。
+  // 例：[{cpu: 6, slot_id: 11, enabled: false}]（管理员刚停用）。
+  repeated SlotAssignment slots = 1;
+  // 服务端当前的 pin_set 版本。例：7
+  int64 pin_set_version = 2;
+  // 只有服务端版本比请求里的 pin_set_version 新时才带；带了就整体替换本地的 pin_set。
+  // 例：{version: 8, files: [], programs: []}（解除全部预热）；版本未变时省略。
+  PinSet pin_set = 3;
+}
+
+// PinSet 是声明式预热的目标：判题机应该在本地持有、并且不被 LRU 淘汰的文件和预编译程序。
+// 判题机自己对比本地缓存补齐，不在集合里的旧钉住项解除钉住（但不立刻删除，按 TTL 和 LRU 自然淘汰）。
+message PinSet {
+  // 版本号，单调递增。例：7
+  int64 version = 1;
+  // 要持有的文件（测试数据、标准答案）。
+  // 例：[{sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", size: 0}]；无目标时为空。
+  repeated BlobRef files = 2;
+  // 要提前编译好的 checker、交互器、manager。
+  // 例：[{source: {sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08", size: 4096}, language: "cpp23"}]；无辅助程序时为空。
+  repeated ProgramRef programs = 3;
+}
+
+// ClaimTaskRequest 是 ClaimTask 的入参。
+message ClaimTaskRequest {
+  // 领任务的槽位。例：12
+  int64 slot_id = 1;
+  // 最多等多少秒，0 表示不等，超过 max_claim_wait_seconds 按上限算。例：25
+  int32 wait_seconds = 2;
+  // 本次逻辑领任务的 UUID，响应未知时重试不变；同会话内不得用于另一轮领任务。例："97b673b5-9bcf-4b46-a2f8-fc38bfae6ccb"
+  string request_id = 3;
+}
+
+// ClaimTaskResponse 是 ClaimTask 的出参。
+message ClaimTaskResponse {
+  // 领到的任务；等到超时仍然没有任务时不带。
+  // 例：{task_id: 88001, lease_token: 5003, ordinal: 3, ...}；长轮询超时省略。
+  Task task = 1;
+}
+
+// Task 是一个判题任务：一份评测里的一个测试点，或者一次自定义运行。它自带跑这个点需要的全部信息，judgehost 不用再查别的。
+message Task {
+  // 任务 ID。例：88001
+  int64 task_id = 1;
+  // 租约的 fencing token，全局单调递增；续约和回报都必须原样带回。例：5003
+  int64 lease_token = 2;
+  // 租约到期时间，服务端时间 >= 此值即失效，首次回报和续约均拒绝；后台稍后回收进队列。例：2026-11-08T14:00:30+08:00
+  google.protobuf.Timestamp lease_expires_at = 3;
+  // 所属评测的 ID。例：2048
+  int64 judging_id = 4;
+  // 所属提交的 ID。例：1024
+  int64 submission_id = 5;
+  // 这个任务是样例、数据还是自定义运行。
+  // 例：TASK_PHASE_DATA（提交 1024 的第 3 个数据点）。
+  TaskPhase phase = 6;
+  // 测试点在本阶段里的序号，从 1 开始；自定义运行为 0。例：3（第 3 个数据点）
+  int32 ordinal = 7;
+  // 选手程序。
+  // 例：{language: "cpp23", source: "int main(){}", source_sha256: "<源码摘要>"}。
+  Program program = 8;
+  // 题目的判题配置。
+  // 例：{problem_id: "test-001", revision: 1, kind: PROBLEM_KIND_STANDARD, io_mode: IO_MODE_STDIO, checker: {builtin: "wcmp"}}。
+  ProblemSpec problem = 9;
+  // 这次运行的资源限制（已经乘过时间倍率）。
+  // 例：{time_limit_ms: 2000, base_time_limit_ms: 1000, time_factor: "2.0", memory_limit_kb: 262144, output_limit_kb: 65536}。
+  Limits limits = 10;
+  // 这个测试点的输入；自定义运行时是选手给的输入。
+  // 例：{sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", size: 0}（空输入也带引用）。
+  BlobRef input = 11;
+  // 标准答案；自定义运行时不带。
+  // 例：{sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08", size: 4}；自定义运行省略。
+  BlobRef answer = 12;
+  // 判因和回传选项。
+  // 例：{fine_feedback: true, sanitizer: true, capture_stdout_bytes: 4096}；省略时按各字段零值处理。
+  TaskOptions options = 13;
+  // W3C traceparent，judgehost 的日志带上它，串起提交从浏览器到判题机的全链路。例："00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+  string traceparent = 14;
+}
+
+// TaskPhase 是任务所属的阶段。
+enum TaskPhase {
+  // 未指定，不应出现。
+  TASK_PHASE_UNSPECIFIED = 0;
+  // 样例点。例：日常模式提交后先跑的 2 个样例；或者「样例测试」按钮。
+  TASK_PHASE_SAMPLE = 1;
+  // 数据点。例：样例全过后跑的 20 个数据点。
+  TASK_PHASE_DATA = 2;
+  // 自定义运行：用选手给的输入跑一次，只回显输出，不校验。
+  TASK_PHASE_CUSTOM = 3;
+}
+
+// Program 是选手程序：源码和语言。judgehost 自己编译（编译产物按 sha256(语言 + 编译参数 + 源码) 缓存，同一份提交的多个点只编译一次）。
+message Program {
+  // 语言代号：c、cpp17、cpp20、cpp23、java、go、pypy3。例："cpp23"
+  string language = 1;
+  // 源码原文，UTF-8，最长 64 KiB。例："#include <bits/stdc++.h>\nint main(){long long a,b;std::cin>>a>>b;std::cout<<a+b;}"
+  bytes source = 2;
+  // 源码的 sha256（十六进制小写），judgehost 用它做编译缓存的一部分键，并校验 source 没被截断。
+  // 例："9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+  string source_sha256 = 3;
+}
+
+// ProblemSpec 是题目的判题配置，按「题目 ID + 版本」不变。
+message ProblemSpec {
+  // 题目 ID。例："test-004"
+  string problem_id = 1;
+  // 题目版本，题目内容变了就 +1；judgehost 只用它打日志。例：1
+  int32 revision = 2;
+  // 题型。
+  // 例：PROBLEM_KIND_INTERACTIVE（test-004 猜数）。
+  ProblemKind kind = 3;
+  // 输入输出方式；交互题和 run-twice 只能是标准输入输出。
+  // 例：IO_MODE_FILE（test-002 读 sum.in、写 sum.out）。
+  IOMode io_mode = 4;
+  // 文件题的输入文件名，判题机把输入放进工作目录叫这个名字；标准题为空。例："sum.in"
+  string input_file = 5;
+  // 文件题的输出文件名，跑完从工作目录读它；标准题为空。例："sum.out"
+  string output_file = 6;
+  // 怎么判对错。标准题、文件题必填；交互题不用（由交互器判）；run-twice 必填（第二次运行之后用它判）。
+  // 例：{builtin: "wcmp"}；交互题或自定义运行省略。
+  Checker checker = 7;
+  // 交互器源码（testlib），只有交互题有。
+  // 例：{source: {sha256: "<interactor.cpp 摘要>", size: 2048}, language: "cpp23"}；非交互题省略。
+  ProgramRef interactor = 8;
+  // run-twice 的 manager 源码（testlib），只有 run-twice 有：读第一次运行的输出，往 stdout 写第二次运行的输入。
+  // 例：{source: {sha256: "<manager.cpp 摘要>", size: 3072}, language: "cpp23"}；非 run-twice 题省略。
+  ProgramRef manager = 9;
+}
+
+// ProblemKind 是题型。
+enum ProblemKind {
+  // 未指定，不应出现。
+  PROBLEM_KIND_UNSPECIFIED = 0;
+  // 标准题：选手程序读输入写输出，checker 比对。文件题、SPJ 都属于这一类（分别由 io_mode、checker 区分）。例：test-001 A+B。
+  PROBLEM_KIND_STANDARD = 1;
+  // 交互题：选手程序和交互器用两根管道交叉相连，交互器的退出码决定结论（0 → AC，1、2 → WA，3 → SE）。例：test-004 猜数。
+  PROBLEM_KIND_INTERACTIVE = 2;
+  // CF 式通信题：同一个程序跑两次，输入第一行分别是 first、second；第二次的输入由 manager 根据第一次的输出生成。例：test-005 编码解码。
+  PROBLEM_KIND_RUN_TWICE = 3;
+}
+
+// IOMode 是输入输出方式。
+enum IOMode {
+  // 未指定，按 IO_MODE_STDIO 处理。
+  IO_MODE_UNSPECIFIED = 0;
+  // 标准输入输出：stdin 读判题机写进 tmpfs 的输入文件，stdout 走管道。例：test-001。
+  IO_MODE_STDIO = 1;
+  // 文件输入输出：输入放进工作目录，输出从工作目录读；输出文件算进选手内存。例：test-002 读 sum.in 写 sum.out。
+  IO_MODE_FILE = 2;
+}
+
+// Checker 是判对错的方式：内置 checker 或题目自带的 testlib checker，二选一。
+message Checker {
+  // 判对错的方式。
+  oneof kind {
+    // 内置 checker 名：wcmp（按 token 比，默认）、lcmp（按行比）、ncmp（整数序列）、rcmp4、rcmp6、rcmp9（浮点，绝对或相对误差 1e-4/1e-6/1e-9）、yesno。例："rcmp6"
+    string builtin = 1;
+    // 题目自带的 testlib checker 源码，调用方式 `checker <输入> <选手输出> <标准答案>`。
+    // 例：{source: {sha256: "<checker.cpp 摘要>", size: 4096}, language: "cpp23"}；使用 builtin 时不选此分支。
+    ProgramRef custom = 2;
+  }
+}
+
+// ProgramRef 指向一份题目自带的辅助程序源码（checker、交互器、manager），judgehost 拉下来后用固定参数编译（C++ testlib）并缓存。
+message ProgramRef {
+  // 源码文件。
+  // 例：{sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08", size: 4096}（checker.cpp）。
+  BlobRef source = 1;
+  // 源码语言，alpha.1 只支持 cpp23。例："cpp23"
+  string language = 2;
+}
+
+// BlobRef 指向一个按内容寻址的文件。
+message BlobRef {
+  // 文件内容的 sha256，十六进制小写，64 个字符。例："e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  string sha256 = 1;
+  // 文件大小，字节。例：209715200（200 MiB）
+  int64 size = 2;
+}
+
+// Limits 是一次运行的资源限制，服务端已经按语言乘过时间倍率。
+message Limits {
+  // CPU 时间上限，毫秒（Java、PyPy 已经乘过倍率）。例：2000（题目 1000 ms，Java 倍率 2）
+  int32 time_limit_ms = 1;
+  // 题目原始时限，毫秒，只用来写判因说明。例：1000
+  int32 base_time_limit_ms = 2;
+  // 这次用的时间倍率，十进制字符串。例："2.0"
+  string time_factor = 3;
+  // 选手内存上限，KiB（题目限制；JVM 余量、PyPy 余量由 judgehost 自己按语言加在 cgroup 上，不在这里）。例：262144（256 MiB）
+  int64 memory_limit_kb = 4;
+  // 输出上限，KiB（stdout 或文件题输出文件）。例：65536（64 MiB）
+  int64 output_limit_kb = 5;
+}
+
+// TaskOptions 是这个任务的判因和回传选项。
+message TaskOptions {
+  // 是否给精细判因（说明和行号）。比赛模式为 false 时 judgehost 照样算，只是服务端不展示；这里主要决定要不要做开销大的分析。例：true
+  bool fine_feedback = 1;
+  // 是否额外用 sanitizer 编译再跑一遍（T2），只在日常模式的 C、C++ 样例点上为 true。例：true
+  bool sanitizer = 2;
+  // 选手 stdout 回传多少字节（样例点 4096，自定义运行 65536，数据点 0 表示不回传）。例：4096
+  int32 capture_stdout_bytes = 3;
+  // 选手 stderr 回传多少字节（只有自定义运行回传，用来看调试输出）。例：4096
+  int32 capture_stderr_bytes = 4;
+}
+
+// RenewLeaseRequest 是 RenewLease 的入参。
+message RenewLeaseRequest {
+  // 任务 ID。例：88001
+  int64 task_id = 1;
+  // 领任务时拿到的 fencing token。例：5003
+  int64 lease_token = 2;
+}
+
+// RenewLeaseResponse 是 RenewLease 的出参。
+message RenewLeaseResponse {
+  // 新的租约到期时间，cancelled=true 时不带。例：2026-11-08T14:01:00+08:00
+  google.protobuf.Timestamp lease_expires_at = 1;
+  // 任务是否已被取消（早停、样例没过、管理员取消）。为 true 时 judgehost 立刻停掉这次运行，不再回报。例：false
+  bool cancelled = 2;
+}
+
+// ReportResultRequest 是 ReportResult 的入参。
+message ReportResultRequest {
+  // 任务 ID。例：88001
+  int64 task_id = 1;
+  // 领任务时拿到的 fencing token。例：5003
+  int64 lease_token = 2;
+  // 槽位 ID。例：11
+  int64 slot_id = 3;
+  // 编译结果。这个槽位为这个任务编译过（或者命中了编译缓存）就带；PyPy 这类不用编译的语言也带（ok=true、output 为空）。
+  // 例：{ok: true, cached: true, time_ms: 0}；尚未执行编译（如拉取输入失败直接报 SE）时省略。
+  CompileResult compile = 4;
+  // 这个测试点的运行结果，必填。编译失败时 verdict 为 VERDICT_COMPILATION_ERROR。
+  // 例：{verdict: VERDICT_COMPILATION_ERROR, reason_code: "compile_error"}（编译失败也必填）。
+  RunResult run = 5;
+}
+
+// CompileResult 是选手程序的编译结果。
+message CompileResult {
+  // 是否编译成功。例：true
+  bool ok = 1;
+  // 编译器输出（stderr + stdout），最多 64 KiB，超出截断。例："main.cpp:3:5: error: 'cout' was not declared in this scope"
+  string output = 2;
+  // 编译花的 CPU 时间，毫秒；命中缓存时为 0。例：1830
+  int32 time_ms = 3;
+  // 是否命中编译缓存。例：true
+  bool cached = 4;
+}
+
+// RunResult 是一个测试点的运行结果（T1 判因 + 资源用量 + 可选的 T2 提示和输出回传）。
+message RunResult {
+  // 结论。
+  // 例：VERDICT_ACCEPTED（test-001 输出通过 wcmp）。
+  Verdict verdict = 1;
+  // 原因码，受控值；AC 时为空。全表见 renice-oj docs/ARCHITECTURE.md §5.4。例："stack_overflow"
+  string reason_code = 2;
+  // 给人看的一句中文说明；AC 时为空。例："递归太深：栈用到约 250 MiB，把内存吃光了"
+  string message = 3;
+  // 出错的源码行号，拿不到时为 0。例：17
+  int32 line = 4;
+  // CPU 时间，毫秒，已扣掉运行时启动开销（Java、PyPy）。例：37
+  int32 time_ms = 5;
+  // 墙钟时间，毫秒。例：45
+  int32 wall_ms = 6;
+  // 内存，KiB，按语言口径算（C/C++/Go 是峰值；Java 是堆峰值；PyPy 是峰值减启动内存）。例：3276
+  int64 memory_kb = 7;
+  // 进程退出码，被信号杀掉时为 0。例：0
+  int32 exit_code = 8;
+  // 杀掉进程的信号编号，正常退出时为 0。例：11（SIGSEGV）
+  int32 signal = 9;
+  // checker 或交互器的输出（testlib 的那一行说明），最多 1 KiB。例："wrong answer 3rd numbers differ - expected: '5', found: '6'"
+  string checker_message = 10;
+  // 选手 stdout 的前 capture_stdout_bytes 字节；没要求回传时为空。例："3\n"
+  bytes stdout_head = 11;
+  // stdout 是否比回传的部分更长。例：false
+  bool stdout_truncated = 12;
+  // 选手 stderr 的前 capture_stderr_bytes 字节；没要求回传时为空。例："debug: n=5\n"
+  bytes stderr_head = 13;
+  // T2 sanitizer 的提示；没跑 sanitizer 时不带。
+  // 例：{clean: false, kind: "global_overflow", line: 23}；未运行 sanitizer 时省略。
+  SanitizerHint sanitizer = 14;
+  // run-twice 时两次运行的明细（第一次、第二次各一项）；其他题型为空。time_ms、memory_kb 取两次的最大值。
+  // 例：[{index: 1, verdict: VERDICT_ACCEPTED, time_ms: 120}, {index: 2, verdict: VERDICT_ACCEPTED, time_ms: 95}]；第一轮失败只带第一项，其他题型为空。
+  repeated SubRun sub_runs = 15;
+}
+
+// Verdict 是测试点的结论。
+enum Verdict {
+  // 未指定，服务端按 VERDICT_SYSTEM_ERROR 处理。
+  VERDICT_UNSPECIFIED = 0;
+  // AC：通过。
+  VERDICT_ACCEPTED = 1;
+  // WA：答案错误；交互题里违反交互协议也算。
+  VERDICT_WRONG_ANSWER = 2;
+  // TLE：CPU 时间超限。
+  VERDICT_TIME_LIMIT_EXCEEDED = 3;
+  // MLE：内存超限，包括静态数组超限、递归太深。
+  VERDICT_MEMORY_LIMIT_EXCEEDED = 4;
+  // OLE：输出超限。
+  VERDICT_OUTPUT_LIMIT_EXCEEDED = 5;
+  // ILE：空闲超限，墙钟超了但 CPU 没怎么用（例：交互题没 flush、在等输入）。
+  VERDICT_IDLENESS_LIMIT_EXCEEDED = 6;
+  // RE：运行错误。
+  VERDICT_RUNTIME_ERROR = 7;
+  // CE：编译错误。
+  VERDICT_COMPILATION_ERROR = 8;
+  // SE：系统错误（判题机、checker 或交互器自身出错，或者进程被外部杀掉）。服务端对 reason_code=external_kill 自动重判。
+  VERDICT_SYSTEM_ERROR = 9;
+}
+
+// SanitizerHint 是 T2 的提示：用 -fsanitize=address,undefined 编译后再跑一遍样例的发现，只用于提示，不改结论。
+message SanitizerHint {
+  // sanitizer 版本是否跑完且没发现问题。例：false
+  bool clean = 1;
+  // 发现的问题类型，受控值：heap_overflow、stack_buffer_overflow、global_overflow、use_after_free、signed_overflow、
+  // shift_overflow、null_deref、div_by_zero、misaligned、other；clean=true 时为空。例："global_overflow"
+  string kind = 2;
+  // 给人看的一句中文说明。例："全局数组 a 越界：访问 a[100005]，大小 100005"
+  string message = 3;
+  // 出问题的源码行号，拿不到时为 0。例：23
+  int32 line = 4;
+}
+
+// SubRun 是 run-twice 里一次运行的明细。
+message SubRun {
+  // 第几次运行：1 或 2。例：1
+  int32 index = 1;
+  // 这次运行的结论（第一次运行出了 RE、TLE 等，整个点就是这个结论，不再跑第二次）。
+  // 例：VERDICT_TIME_LIMIT_EXCEEDED（第一轮超时，第二轮不运行）。
+  Verdict verdict = 2;
+  // 原因码。例："cpu_time"
+  string reason_code = 3;
+  // CPU 时间，毫秒。例：120
+  int32 time_ms = 4;
+  // 内存，KiB。例：10240
+  int64 memory_kb = 5;
+}
+
+// ReportResultResponse 是 ReportResult 的出参。
+message ReportResultResponse {
+  // 结果是否入库。任务已被取消时为 false（judgehost 不用重试）。例：true
+  bool accepted = 1;
+  // 是否是同一个 (task_id, lease_token) 的重复回报。例：false
+  bool duplicate = 2;
+}
+
+// FetchBlobRequest 是 FetchBlob 的入参。
+message FetchBlobRequest {
+  // 要拉的文件的 sha256，十六进制小写。例："e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  string sha256 = 1;
+}
+
+// FetchBlobResponse 是 FetchBlob 流里的一块。
+message FetchBlobResponse {
+  // 文件总大小，字节；只有第一条响应带，之后为 0。例：209715200
+  int64 size = 1;
+  // 这一块的内容，最多 1 MiB。例：（二进制）
+  bytes chunk = 2;
+}
