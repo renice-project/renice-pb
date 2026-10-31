@@ -1435,7 +1435,7 @@ type Task struct {
 	TaskId int64 `protobuf:"varint,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
 	// 租约的 fencing token，全局单调递增；续约和回报都必须原样带回。例：5003
 	LeaseToken int64 `protobuf:"varint,2,opt,name=lease_token,json=leaseToken,proto3" json:"lease_token,omitempty"`
-	// 租约到期时间。到期前没续约，任务回到队列。例：2026-11-08T14:00:30+08:00
+	// 租约到期时间，服务端时间 >= 此值即失效，首次回报和续约均拒绝；后台稍后回收进队列。例：2026-11-08T14:00:30+08:00
 	LeaseExpiresAt *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=lease_expires_at,json=leaseExpiresAt,proto3" json:"lease_expires_at,omitempty"`
 	// 所属评测的 ID。例：2048
 	JudgingId int64 `protobuf:"varint,4,opt,name=judging_id,json=judgingId,proto3" json:"judging_id,omitempty"`
@@ -2184,7 +2184,7 @@ func (x *RenewLeaseRequest) GetLeaseToken() int64 {
 // RenewLeaseResponse 是 RenewLease 的出参。
 type RenewLeaseResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// 新的租约到期时间。例：2026-11-08T14:01:00+08:00
+	// 新的租约到期时间，cancelled=true 时不带。例：2026-11-08T14:01:00+08:00
 	LeaseExpiresAt *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=lease_expires_at,json=leaseExpiresAt,proto3" json:"lease_expires_at,omitempty"`
 	// 任务是否已被取消（早停、样例没过、管理员取消）。为 true 时 judgehost 立刻停掉这次运行，不再回报。例：false
 	Cancelled     bool `protobuf:"varint,2,opt,name=cancelled,proto3" json:"cancelled,omitempty"`

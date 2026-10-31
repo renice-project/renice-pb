@@ -101,24 +101,40 @@ type JudgeServiceClient interface {
 	//
 	// 业务例子：槽位 12 调 ClaimTask(wait_seconds=25)，等了 3 秒后有人交了 A+B，拿到 task_id 88001、lease_token 5003。
 	ClaimTask(ctx context.Context, in *ClaimTaskRequest, opts ...grpc.CallOption) (*ClaimTaskResponse, error)
-	// RenewLease 给正在跑的任务续约，把租约到期时间往后推 lease_seconds 秒。
+	// RenewLease 给正在跑的任务续约，把租约到期时间设置为锁定校验时的服务端当前时间 + lease_seconds。
 	//
-	// 任务已经被取消时（例如 ICPC 早停、样例没过、管理员取消）返回 cancelled=true，judgehost 应立刻杀掉这次运行、不再回报，槽位回到空闲。
+	// 判定顺序：先鉴权、校验当前会话；按机器锁 → 任务行锁的固定顺序加锁，锁内先校验任务所属机器、会话和 token。
+	// 不属于本机器 → PERMISSION_DENIED；所属会话或 token 不匹配 → FAILED_PRECONDITION「租约已失效」。
+	// 身份匹配后，cancelled 优先返回 cancelled=true（不检查到期时间、不续约），响应不带 lease_expires_at。
+	// 其余情况必须 state=leased 且服务端当前时间严格早于 lease_expires_at 才能续约；done、queued、恰好到期及过期均拒绝。
+	// 当前时间取锁全部拿到后的实时时钟（PG clock_timestamp()），不能用事务开始时的 now()，不依赖后台回收是否运行。
+	// 续约、首次回报、回收和取消须使用同样的锁顺序串行判定；取消保留原机器、会话及 token 供身份校验。
+	// 返回 cancelled 或 FAILED_PRECONDITION 时，judgehost 立刻停掉本次运行，不再回报，槽位回到空闲。
 	//
-	// 错误码：lease_token 对不上（租约已过期、任务被别的槽位领走）→ FAILED_PRECONDITION「租约已失效」，
-	// judgehost 同样立刻停掉这次运行、不再回报。
+	// 验收例：到期时间 14:00:30，14:00:29 续约可延至 14:00:59；14:00:30 和 14:00:31 即使回收未运行也拒绝。
 	//
 	// 业务例子：一个 Java 数据点跑了 12 秒（编译 4 秒 + 运行 8 秒），期间续约了 1 次。
 	RenewLease(ctx context.Context, in *RenewLeaseRequest, opts ...grpc.CallOption) (*RenewLeaseResponse, error)
 	// ReportResult 回报一个任务的结果。
 	//
-	// 幂等：同一个 (task_id, lease_token) 重复回报，第二次起直接返回 duplicate=true，不重复写入。
-	// 所以「服务端已经写入但响应在路上丢了」时重试是安全的。
+	// 判定顺序：先鉴权及当前会话校验，再按机器锁 → 任务行锁加锁，校验任务所属机器、会话、slot_id 和 token。
+	// 不属于本机器或槽位 → PERMISSION_DENIED；所属会话或 token 不匹配 → FAILED_PRECONDITION「租约已失效」。
+	// 身份匹配后依次处理：
+	// 1. done 且此 token 已成功写入回报 → accepted=true、duplicate=true，不重新校验结果体、不检查到期时间、不重复写入。
+	// 2. cancelled → accepted=false、duplicate=false，不检查到期时间、不写结果；取消保留原租约身份，重复调用仍返回此值。
+	// 3. 其余必须 state=leased 且锁全部拿到后的服务端实时时钟严格早于 lease_expires_at；否则租约已失效。
+	// 4. 校验结果体、写入结果并改 done，在同一事务提交后返回 accepted=true、duplicate=false。
+	// done 的租约身份和幂等结果保留到任务被删除；后台回收不能清理 done/cancelled 的 token。
+	// 因此「写入成功但响应丢失」在同一会话内的重试即使过了原到期时间仍幂等；换代后旧会话先被拒绝。
+	//
+	// 验收例：到期 14:00:30，14:00:29 首次回报成功，14:00:31 重试返回 duplicate；
+	// 尚未回报的任务在 14:00:30 或 14:00:31 首次回报均拒绝，即使 token 未变且回收未运行。
+	// 同 token 的任务已取消时，14:00:31 续约返回 cancelled，回报返回 accepted=false；不同 token 先拒绝。
 	//
 	// 错误码：
-	// - lease_token 对不上（租约过期后任务已回到队列或被别人领走）→ FAILED_PRECONDITION「租约已失效」，judgehost 丢掉这个结果。
+	// - 身份不匹配或首次回报的租约已到期（即使 token 未变）→ FAILED_PRECONDITION「租约已失效」，judgehost 丢掉结果。
 	// - 任务已经被取消 → 返回成功但 accepted=false（结果不入库），judgehost 不用重试。
-	// - result 里缺 run → INVALID_ARGUMENT。
+	// - 首次有效回报缺 run → INVALID_ARGUMENT（不消费租约，可补齐后在到期前重试）。
 	//
 	// 业务例子：槽位 11 回报 task_id 88001：编译成功（命中编译缓存）、AC、1 ms、0.6 MiB。
 	ReportResult(ctx context.Context, in *ReportResultRequest, opts ...grpc.CallOption) (*ReportResultResponse, error)
@@ -282,24 +298,40 @@ type JudgeServiceServer interface {
 	//
 	// 业务例子：槽位 12 调 ClaimTask(wait_seconds=25)，等了 3 秒后有人交了 A+B，拿到 task_id 88001、lease_token 5003。
 	ClaimTask(context.Context, *ClaimTaskRequest) (*ClaimTaskResponse, error)
-	// RenewLease 给正在跑的任务续约，把租约到期时间往后推 lease_seconds 秒。
+	// RenewLease 给正在跑的任务续约，把租约到期时间设置为锁定校验时的服务端当前时间 + lease_seconds。
 	//
-	// 任务已经被取消时（例如 ICPC 早停、样例没过、管理员取消）返回 cancelled=true，judgehost 应立刻杀掉这次运行、不再回报，槽位回到空闲。
+	// 判定顺序：先鉴权、校验当前会话；按机器锁 → 任务行锁的固定顺序加锁，锁内先校验任务所属机器、会话和 token。
+	// 不属于本机器 → PERMISSION_DENIED；所属会话或 token 不匹配 → FAILED_PRECONDITION「租约已失效」。
+	// 身份匹配后，cancelled 优先返回 cancelled=true（不检查到期时间、不续约），响应不带 lease_expires_at。
+	// 其余情况必须 state=leased 且服务端当前时间严格早于 lease_expires_at 才能续约；done、queued、恰好到期及过期均拒绝。
+	// 当前时间取锁全部拿到后的实时时钟（PG clock_timestamp()），不能用事务开始时的 now()，不依赖后台回收是否运行。
+	// 续约、首次回报、回收和取消须使用同样的锁顺序串行判定；取消保留原机器、会话及 token 供身份校验。
+	// 返回 cancelled 或 FAILED_PRECONDITION 时，judgehost 立刻停掉本次运行，不再回报，槽位回到空闲。
 	//
-	// 错误码：lease_token 对不上（租约已过期、任务被别的槽位领走）→ FAILED_PRECONDITION「租约已失效」，
-	// judgehost 同样立刻停掉这次运行、不再回报。
+	// 验收例：到期时间 14:00:30，14:00:29 续约可延至 14:00:59；14:00:30 和 14:00:31 即使回收未运行也拒绝。
 	//
 	// 业务例子：一个 Java 数据点跑了 12 秒（编译 4 秒 + 运行 8 秒），期间续约了 1 次。
 	RenewLease(context.Context, *RenewLeaseRequest) (*RenewLeaseResponse, error)
 	// ReportResult 回报一个任务的结果。
 	//
-	// 幂等：同一个 (task_id, lease_token) 重复回报，第二次起直接返回 duplicate=true，不重复写入。
-	// 所以「服务端已经写入但响应在路上丢了」时重试是安全的。
+	// 判定顺序：先鉴权及当前会话校验，再按机器锁 → 任务行锁加锁，校验任务所属机器、会话、slot_id 和 token。
+	// 不属于本机器或槽位 → PERMISSION_DENIED；所属会话或 token 不匹配 → FAILED_PRECONDITION「租约已失效」。
+	// 身份匹配后依次处理：
+	// 1. done 且此 token 已成功写入回报 → accepted=true、duplicate=true，不重新校验结果体、不检查到期时间、不重复写入。
+	// 2. cancelled → accepted=false、duplicate=false，不检查到期时间、不写结果；取消保留原租约身份，重复调用仍返回此值。
+	// 3. 其余必须 state=leased 且锁全部拿到后的服务端实时时钟严格早于 lease_expires_at；否则租约已失效。
+	// 4. 校验结果体、写入结果并改 done，在同一事务提交后返回 accepted=true、duplicate=false。
+	// done 的租约身份和幂等结果保留到任务被删除；后台回收不能清理 done/cancelled 的 token。
+	// 因此「写入成功但响应丢失」在同一会话内的重试即使过了原到期时间仍幂等；换代后旧会话先被拒绝。
+	//
+	// 验收例：到期 14:00:30，14:00:29 首次回报成功，14:00:31 重试返回 duplicate；
+	// 尚未回报的任务在 14:00:30 或 14:00:31 首次回报均拒绝，即使 token 未变且回收未运行。
+	// 同 token 的任务已取消时，14:00:31 续约返回 cancelled，回报返回 accepted=false；不同 token 先拒绝。
 	//
 	// 错误码：
-	// - lease_token 对不上（租约过期后任务已回到队列或被别人领走）→ FAILED_PRECONDITION「租约已失效」，judgehost 丢掉这个结果。
+	// - 身份不匹配或首次回报的租约已到期（即使 token 未变）→ FAILED_PRECONDITION「租约已失效」，judgehost 丢掉结果。
 	// - 任务已经被取消 → 返回成功但 accepted=false（结果不入库），judgehost 不用重试。
-	// - result 里缺 run → INVALID_ARGUMENT。
+	// - 首次有效回报缺 run → INVALID_ARGUMENT（不消费租约，可补齐后在到期前重试）。
 	//
 	// 业务例子：槽位 11 回报 task_id 88001：编译成功（命中编译缓存）、AC、1 ms、0.6 MiB。
 	ReportResult(context.Context, *ReportResultRequest) (*ReportResultResponse, error)
