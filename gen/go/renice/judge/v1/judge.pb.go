@@ -337,12 +337,15 @@ type HelloRequest struct {
 	// judgehost 的版本号（renice-judge 仓库的 VERSION）。例："alpha.1"
 	Version string `protobuf:"bytes,1,opt,name=version,proto3" json:"version,omitempty"`
 	// 机器信息。
+	// 例：{hostname: "renice-main", cpu_count: 8}（其余容量和内核字段也按实际填写）。
 	Machine *MachineInfo `protobuf:"bytes,2,opt,name=machine,proto3" json:"machine,omitempty"`
 	// 这个容器管理的全部评测核，一核一项，cpu 不能重复。例：renice-main 传 cpu 6 和 7 两项。
 	Slots []*SlotInfo `protobuf:"bytes,3,rep,name=slots,proto3" json:"slots,omitempty"`
 	// 启动自检的每一项结果。服务端原样存下来给管理端看；有 fatal=true 且 ok=false 的项时拒绝上线。
+	// 例：[{name: "cgroup_writable", ok: true, fatal: true}]。
 	SelfChecks []*SelfCheck `protobuf:"bytes,4,rep,name=self_checks,json=selfChecks,proto3" json:"self_checks,omitempty"`
 	// 判题机镜像里实际装好的语言和版本。服务端只给它派这里列出的语言。
+	// 例：[{code: "cpp23", version: "g++ 14.2.0"}]。
 	Languages []*LanguageInfo `protobuf:"bytes,5,rep,name=languages,proto3" json:"languages,omitempty"`
 	// 本次进程启动的随机 UUID；同次启动的 Hello 重试保持不变，新进程生成新值。例："b912b956-84d4-4534-a87d-559946868812"
 	InstanceId    string `protobuf:"bytes,6,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
@@ -428,6 +431,7 @@ type HelloResponse struct {
 	// 这台机器在服务端的 ID。例：3
 	MachineId int64 `protobuf:"varint,1,opt,name=machine_id,json=machineId,proto3" json:"machine_id,omitempty"`
 	// 每个槽位分到的 slot_id，和请求里的 slots 一一对应（按 cpu 匹配）。
+	// 例：[{cpu: 6, slot_id: 11, enabled: true}]。
 	Slots []*SlotAssignment `protobuf:"bytes,2,rep,name=slots,proto3" json:"slots,omitempty"`
 	// 多少秒发一次 Heartbeat。例：10
 	HeartbeatIntervalSeconds int32 `protobuf:"varint,3,opt,name=heartbeat_interval_seconds,json=heartbeatIntervalSeconds,proto3" json:"heartbeat_interval_seconds,omitempty"`
@@ -874,10 +878,13 @@ func (x *LanguageInfo) GetVersion() string {
 type HeartbeatRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// 每个槽位的当前状态。
+	// 例：[{slot_id: 11, state: SLOT_STATE_BUSY, current_task_id: 88001}]。
 	Slots []*SlotStatus `protobuf:"bytes,1,rep,name=slots,proto3" json:"slots,omitempty"`
 	// 磁盘缓存的情况。
+	// 例：{used_bytes: 3221225472, max_bytes: 21474836480, entries: 1532}。
 	Cache *CacheStatus `protobuf:"bytes,2,opt,name=cache,proto3" json:"cache,omitempty"`
 	// 预热进度；还没收到过 pin_set 时不填。
+	// 例：{pin_set_version: 7, files_ready: 41, files_total: 64}；未开始预热时省略。
 	Prewarm *PrewarmStatus `protobuf:"bytes,3,opt,name=prewarm,proto3" json:"prewarm,omitempty"`
 	// judgehost 目前持有的 pin_set 版本；服务端版本更新时才在响应里带完整的 pin_set。还没有时填 0。例：7
 	PinSetVersion int64 `protobuf:"varint,4,opt,name=pin_set_version,json=pinSetVersion,proto3" json:"pin_set_version,omitempty"`
@@ -949,6 +956,7 @@ type SlotStatus struct {
 	// 槽位 ID。例：11
 	SlotId int64 `protobuf:"varint,1,opt,name=slot_id,json=slotId,proto3" json:"slot_id,omitempty"`
 	// 状态。
+	// 例：SLOT_STATE_BUSY（槽位 11 正在评测）。
 	State SlotState `protobuf:"varint,2,opt,name=state,proto3,enum=renice.judge.v1.SlotState" json:"state,omitempty"`
 	// 正在跑的任务 ID，空闲时为 0。例：88001
 	CurrentTaskId int64 `protobuf:"varint,3,opt,name=current_task_id,json=currentTaskId,proto3" json:"current_task_id,omitempty"`
@@ -1193,10 +1201,12 @@ func (x *PrewarmStatus) GetErrors() []string {
 type HeartbeatResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// 每个槽位当前是否启用（管理员可能刚停用或启用了某个核）。
+	// 例：[{cpu: 6, slot_id: 11, enabled: false}]（管理员刚停用）。
 	Slots []*SlotAssignment `protobuf:"bytes,1,rep,name=slots,proto3" json:"slots,omitempty"`
 	// 服务端当前的 pin_set 版本。例：7
 	PinSetVersion int64 `protobuf:"varint,2,opt,name=pin_set_version,json=pinSetVersion,proto3" json:"pin_set_version,omitempty"`
 	// 只有服务端版本比请求里的 pin_set_version 新时才带；带了就整体替换本地的 pin_set。
+	// 例：{version: 8, files: [], programs: []}（解除全部预热）；版本未变时省略。
 	PinSet        *PinSet `protobuf:"bytes,3,opt,name=pin_set,json=pinSet,proto3" json:"pin_set,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1260,8 +1270,10 @@ type PinSet struct {
 	// 版本号，单调递增。例：7
 	Version int64 `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`
 	// 要持有的文件（测试数据、标准答案）。
+	// 例：[{sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", size: 0}]；无目标时为空。
 	Files []*BlobRef `protobuf:"bytes,2,rep,name=files,proto3" json:"files,omitempty"`
 	// 要提前编译好的 checker、交互器、manager。
+	// 例：[{source: {sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08", size: 4096}, language: "cpp23"}]；无辅助程序时为空。
 	Programs      []*ProgramRef `protobuf:"bytes,3,rep,name=programs,proto3" json:"programs,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1386,6 +1398,7 @@ func (x *ClaimTaskRequest) GetRequestId() string {
 type ClaimTaskResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// 领到的任务；等到超时仍然没有任务时不带。
+	// 例：{task_id: 88001, lease_token: 5003, ordinal: 3, ...}；长轮询超时省略。
 	Task          *Task `protobuf:"bytes,1,opt,name=task,proto3" json:"task,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1442,20 +1455,27 @@ type Task struct {
 	// 所属提交的 ID。例：1024
 	SubmissionId int64 `protobuf:"varint,5,opt,name=submission_id,json=submissionId,proto3" json:"submission_id,omitempty"`
 	// 这个任务是样例、数据还是自定义运行。
+	// 例：TASK_PHASE_DATA（提交 1024 的第 3 个数据点）。
 	Phase TaskPhase `protobuf:"varint,6,opt,name=phase,proto3,enum=renice.judge.v1.TaskPhase" json:"phase,omitempty"`
 	// 测试点在本阶段里的序号，从 1 开始；自定义运行为 0。例：3（第 3 个数据点）
 	Ordinal int32 `protobuf:"varint,7,opt,name=ordinal,proto3" json:"ordinal,omitempty"`
 	// 选手程序。
+	// 例：{language: "cpp23", source: "int main(){}", source_sha256: "<源码摘要>"}。
 	Program *Program `protobuf:"bytes,8,opt,name=program,proto3" json:"program,omitempty"`
 	// 题目的判题配置。
+	// 例：{problem_id: "test-001", revision: 1, kind: PROBLEM_KIND_STANDARD, io_mode: IO_MODE_STDIO, checker: {builtin: "wcmp"}}。
 	Problem *ProblemSpec `protobuf:"bytes,9,opt,name=problem,proto3" json:"problem,omitempty"`
 	// 这次运行的资源限制（已经乘过时间倍率）。
+	// 例：{time_limit_ms: 2000, base_time_limit_ms: 1000, time_factor: "2.0", memory_limit_kb: 262144, output_limit_kb: 65536}。
 	Limits *Limits `protobuf:"bytes,10,opt,name=limits,proto3" json:"limits,omitempty"`
 	// 这个测试点的输入；自定义运行时是选手给的输入。
+	// 例：{sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", size: 0}（空输入也带引用）。
 	Input *BlobRef `protobuf:"bytes,11,opt,name=input,proto3" json:"input,omitempty"`
 	// 标准答案；自定义运行时不带。
+	// 例：{sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08", size: 4}；自定义运行省略。
 	Answer *BlobRef `protobuf:"bytes,12,opt,name=answer,proto3" json:"answer,omitempty"`
 	// 判因和回传选项。
+	// 例：{fine_feedback: true, sanitizer: true, capture_stdout_bytes: 4096}；省略时按各字段零值处理。
 	Options *TaskOptions `protobuf:"bytes,13,opt,name=options,proto3" json:"options,omitempty"`
 	// W3C traceparent，judgehost 的日志带上它，串起提交从浏览器到判题机的全链路。例："00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 	Traceparent   string `protobuf:"bytes,14,opt,name=traceparent,proto3" json:"traceparent,omitempty"`
@@ -1664,18 +1684,23 @@ type ProblemSpec struct {
 	// 题目版本，题目内容变了就 +1；judgehost 只用它打日志。例：1
 	Revision int32 `protobuf:"varint,2,opt,name=revision,proto3" json:"revision,omitempty"`
 	// 题型。
+	// 例：PROBLEM_KIND_INTERACTIVE（test-004 猜数）。
 	Kind ProblemKind `protobuf:"varint,3,opt,name=kind,proto3,enum=renice.judge.v1.ProblemKind" json:"kind,omitempty"`
 	// 输入输出方式；交互题和 run-twice 只能是标准输入输出。
+	// 例：IO_MODE_FILE（test-002 读 sum.in、写 sum.out）。
 	IoMode IOMode `protobuf:"varint,4,opt,name=io_mode,json=ioMode,proto3,enum=renice.judge.v1.IOMode" json:"io_mode,omitempty"`
 	// 文件题的输入文件名，判题机把输入放进工作目录叫这个名字；标准题为空。例："sum.in"
 	InputFile string `protobuf:"bytes,5,opt,name=input_file,json=inputFile,proto3" json:"input_file,omitempty"`
 	// 文件题的输出文件名，跑完从工作目录读它；标准题为空。例："sum.out"
 	OutputFile string `protobuf:"bytes,6,opt,name=output_file,json=outputFile,proto3" json:"output_file,omitempty"`
 	// 怎么判对错。标准题、文件题必填；交互题不用（由交互器判）；run-twice 必填（第二次运行之后用它判）。
+	// 例：{builtin: "wcmp"}；交互题或自定义运行省略。
 	Checker *Checker `protobuf:"bytes,7,opt,name=checker,proto3" json:"checker,omitempty"`
 	// 交互器源码（testlib），只有交互题有。
+	// 例：{source: {sha256: "<interactor.cpp 摘要>", size: 2048}, language: "cpp23"}；非交互题省略。
 	Interactor *ProgramRef `protobuf:"bytes,8,opt,name=interactor,proto3" json:"interactor,omitempty"`
 	// run-twice 的 manager 源码（testlib），只有 run-twice 有：读第一次运行的输出，往 stdout 写第二次运行的输入。
+	// 例：{source: {sha256: "<manager.cpp 摘要>", size: 3072}, language: "cpp23"}；非 run-twice 题省略。
 	Manager       *ProgramRef `protobuf:"bytes,9,opt,name=manager,proto3" json:"manager,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1854,6 +1879,7 @@ type Checker_Builtin struct {
 
 type Checker_Custom struct {
 	// 题目自带的 testlib checker 源码，调用方式 `checker <输入> <选手输出> <标准答案>`。
+	// 例：{source: {sha256: "<checker.cpp 摘要>", size: 4096}, language: "cpp23"}；使用 builtin 时不选此分支。
 	Custom *ProgramRef `protobuf:"bytes,2,opt,name=custom,proto3,oneof"`
 }
 
@@ -1865,6 +1891,7 @@ func (*Checker_Custom) isChecker_Kind() {}
 type ProgramRef struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// 源码文件。
+	// 例：{sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08", size: 4096}（checker.cpp）。
 	Source *BlobRef `protobuf:"bytes,1,opt,name=source,proto3" json:"source,omitempty"`
 	// 源码语言，alpha.1 只支持 cpp23。例："cpp23"
 	Language      string `protobuf:"bytes,2,opt,name=language,proto3" json:"language,omitempty"`
@@ -2246,8 +2273,10 @@ type ReportResultRequest struct {
 	// 槽位 ID。例：11
 	SlotId int64 `protobuf:"varint,3,opt,name=slot_id,json=slotId,proto3" json:"slot_id,omitempty"`
 	// 编译结果。这个槽位为这个任务编译过（或者命中了编译缓存）就带；PyPy 这类不用编译的语言也带（ok=true、output 为空）。
+	// 例：{ok: true, cached: true, time_ms: 0}；尚未执行编译（如拉取输入失败直接报 SE）时省略。
 	Compile *CompileResult `protobuf:"bytes,4,opt,name=compile,proto3" json:"compile,omitempty"`
 	// 这个测试点的运行结果，必填。编译失败时 verdict 为 VERDICT_COMPILATION_ERROR。
+	// 例：{verdict: VERDICT_COMPILATION_ERROR, reason_code: "compile_error"}（编译失败也必填）。
 	Run           *RunResult `protobuf:"bytes,5,opt,name=run,proto3" json:"run,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2395,6 +2424,7 @@ func (x *CompileResult) GetCached() bool {
 type RunResult struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// 结论。
+	// 例：VERDICT_ACCEPTED（test-001 输出通过 wcmp）。
 	Verdict Verdict `protobuf:"varint,1,opt,name=verdict,proto3,enum=renice.judge.v1.Verdict" json:"verdict,omitempty"`
 	// 原因码，受控值；AC 时为空。全表见 renice-oj docs/ARCHITECTURE.md §5.4。例："stack_overflow"
 	ReasonCode string `protobuf:"bytes,2,opt,name=reason_code,json=reasonCode,proto3" json:"reason_code,omitempty"`
@@ -2421,8 +2451,10 @@ type RunResult struct {
 	// 选手 stderr 的前 capture_stderr_bytes 字节；没要求回传时为空。例："debug: n=5\n"
 	StderrHead []byte `protobuf:"bytes,13,opt,name=stderr_head,json=stderrHead,proto3" json:"stderr_head,omitempty"`
 	// T2 sanitizer 的提示；没跑 sanitizer 时不带。
+	// 例：{clean: false, kind: "global_overflow", line: 23}；未运行 sanitizer 时省略。
 	Sanitizer *SanitizerHint `protobuf:"bytes,14,opt,name=sanitizer,proto3" json:"sanitizer,omitempty"`
 	// run-twice 时两次运行的明细（第一次、第二次各一项）；其他题型为空。time_ms、memory_kb 取两次的最大值。
+	// 例：[{index: 1, verdict: VERDICT_ACCEPTED, time_ms: 120}, {index: 2, verdict: VERDICT_ACCEPTED, time_ms: 95}]；第一轮失败只带第一项，其他题型为空。
 	SubRuns       []*SubRun `protobuf:"bytes,15,rep,name=sub_runs,json=subRuns,proto3" json:"sub_runs,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2643,6 +2675,7 @@ type SubRun struct {
 	// 第几次运行：1 或 2。例：1
 	Index int32 `protobuf:"varint,1,opt,name=index,proto3" json:"index,omitempty"`
 	// 这次运行的结论（第一次运行出了 RE、TLE 等，整个点就是这个结论，不再跑第二次）。
+	// 例：VERDICT_TIME_LIMIT_EXCEEDED（第一轮超时，第二轮不运行）。
 	Verdict Verdict `protobuf:"varint,2,opt,name=verdict,proto3,enum=renice.judge.v1.Verdict" json:"verdict,omitempty"`
 	// 原因码。例："cpu_time"
 	ReasonCode string `protobuf:"bytes,3,opt,name=reason_code,json=reasonCode,proto3" json:"reason_code,omitempty"`

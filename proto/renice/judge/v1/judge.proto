@@ -130,12 +130,15 @@ message HelloRequest {
   // judgehost 的版本号（renice-judge 仓库的 VERSION）。例："alpha.1"
   string version = 1;
   // 机器信息。
+  // 例：{hostname: "renice-main", cpu_count: 8}（其余容量和内核字段也按实际填写）。
   MachineInfo machine = 2;
   // 这个容器管理的全部评测核，一核一项，cpu 不能重复。例：renice-main 传 cpu 6 和 7 两项。
   repeated SlotInfo slots = 3;
   // 启动自检的每一项结果。服务端原样存下来给管理端看；有 fatal=true 且 ok=false 的项时拒绝上线。
+  // 例：[{name: "cgroup_writable", ok: true, fatal: true}]。
   repeated SelfCheck self_checks = 4;
   // 判题机镜像里实际装好的语言和版本。服务端只给它派这里列出的语言。
+  // 例：[{code: "cpp23", version: "g++ 14.2.0"}]。
   repeated LanguageInfo languages = 5;
   // 本次进程启动的随机 UUID；同次启动的 Hello 重试保持不变，新进程生成新值。例："b912b956-84d4-4534-a87d-559946868812"
   string instance_id = 6;
@@ -146,6 +149,7 @@ message HelloResponse {
   // 这台机器在服务端的 ID。例：3
   int64 machine_id = 1;
   // 每个槽位分到的 slot_id，和请求里的 slots 一一对应（按 cpu 匹配）。
+  // 例：[{cpu: 6, slot_id: 11, enabled: true}]。
   repeated SlotAssignment slots = 2;
   // 多少秒发一次 Heartbeat。例：10
   int32 heartbeat_interval_seconds = 3;
@@ -219,10 +223,13 @@ message LanguageInfo {
 // HeartbeatRequest 是 Heartbeat 的入参。
 message HeartbeatRequest {
   // 每个槽位的当前状态。
+  // 例：[{slot_id: 11, state: SLOT_STATE_BUSY, current_task_id: 88001}]。
   repeated SlotStatus slots = 1;
   // 磁盘缓存的情况。
+  // 例：{used_bytes: 3221225472, max_bytes: 21474836480, entries: 1532}。
   CacheStatus cache = 2;
   // 预热进度；还没收到过 pin_set 时不填。
+  // 例：{pin_set_version: 7, files_ready: 41, files_total: 64}；未开始预热时省略。
   PrewarmStatus prewarm = 3;
   // judgehost 目前持有的 pin_set 版本；服务端版本更新时才在响应里带完整的 pin_set。还没有时填 0。例：7
   int64 pin_set_version = 4;
@@ -233,6 +240,7 @@ message SlotStatus {
   // 槽位 ID。例：11
   int64 slot_id = 1;
   // 状态。
+  // 例：SLOT_STATE_BUSY（槽位 11 正在评测）。
   SlotState state = 2;
   // 正在跑的任务 ID，空闲时为 0。例：88001
   int64 current_task_id = 3;
@@ -287,10 +295,12 @@ message PrewarmStatus {
 // HeartbeatResponse 是 Heartbeat 的出参。
 message HeartbeatResponse {
   // 每个槽位当前是否启用（管理员可能刚停用或启用了某个核）。
+  // 例：[{cpu: 6, slot_id: 11, enabled: false}]（管理员刚停用）。
   repeated SlotAssignment slots = 1;
   // 服务端当前的 pin_set 版本。例：7
   int64 pin_set_version = 2;
   // 只有服务端版本比请求里的 pin_set_version 新时才带；带了就整体替换本地的 pin_set。
+  // 例：{version: 8, files: [], programs: []}（解除全部预热）；版本未变时省略。
   PinSet pin_set = 3;
 }
 
@@ -300,8 +310,10 @@ message PinSet {
   // 版本号，单调递增。例：7
   int64 version = 1;
   // 要持有的文件（测试数据、标准答案）。
+  // 例：[{sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", size: 0}]；无目标时为空。
   repeated BlobRef files = 2;
   // 要提前编译好的 checker、交互器、manager。
+  // 例：[{source: {sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08", size: 4096}, language: "cpp23"}]；无辅助程序时为空。
   repeated ProgramRef programs = 3;
 }
 
@@ -318,6 +330,7 @@ message ClaimTaskRequest {
 // ClaimTaskResponse 是 ClaimTask 的出参。
 message ClaimTaskResponse {
   // 领到的任务；等到超时仍然没有任务时不带。
+  // 例：{task_id: 88001, lease_token: 5003, ordinal: 3, ...}；长轮询超时省略。
   Task task = 1;
 }
 
@@ -334,20 +347,27 @@ message Task {
   // 所属提交的 ID。例：1024
   int64 submission_id = 5;
   // 这个任务是样例、数据还是自定义运行。
+  // 例：TASK_PHASE_DATA（提交 1024 的第 3 个数据点）。
   TaskPhase phase = 6;
   // 测试点在本阶段里的序号，从 1 开始；自定义运行为 0。例：3（第 3 个数据点）
   int32 ordinal = 7;
   // 选手程序。
+  // 例：{language: "cpp23", source: "int main(){}", source_sha256: "<源码摘要>"}。
   Program program = 8;
   // 题目的判题配置。
+  // 例：{problem_id: "test-001", revision: 1, kind: PROBLEM_KIND_STANDARD, io_mode: IO_MODE_STDIO, checker: {builtin: "wcmp"}}。
   ProblemSpec problem = 9;
   // 这次运行的资源限制（已经乘过时间倍率）。
+  // 例：{time_limit_ms: 2000, base_time_limit_ms: 1000, time_factor: "2.0", memory_limit_kb: 262144, output_limit_kb: 65536}。
   Limits limits = 10;
   // 这个测试点的输入；自定义运行时是选手给的输入。
+  // 例：{sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", size: 0}（空输入也带引用）。
   BlobRef input = 11;
   // 标准答案；自定义运行时不带。
+  // 例：{sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08", size: 4}；自定义运行省略。
   BlobRef answer = 12;
   // 判因和回传选项。
+  // 例：{fine_feedback: true, sanitizer: true, capture_stdout_bytes: 4096}；省略时按各字段零值处理。
   TaskOptions options = 13;
   // W3C traceparent，judgehost 的日志带上它，串起提交从浏览器到判题机的全链路。例："00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
   string traceparent = 14;
@@ -383,18 +403,23 @@ message ProblemSpec {
   // 题目版本，题目内容变了就 +1；judgehost 只用它打日志。例：1
   int32 revision = 2;
   // 题型。
+  // 例：PROBLEM_KIND_INTERACTIVE（test-004 猜数）。
   ProblemKind kind = 3;
   // 输入输出方式；交互题和 run-twice 只能是标准输入输出。
+  // 例：IO_MODE_FILE（test-002 读 sum.in、写 sum.out）。
   IOMode io_mode = 4;
   // 文件题的输入文件名，判题机把输入放进工作目录叫这个名字；标准题为空。例："sum.in"
   string input_file = 5;
   // 文件题的输出文件名，跑完从工作目录读它；标准题为空。例："sum.out"
   string output_file = 6;
   // 怎么判对错。标准题、文件题必填；交互题不用（由交互器判）；run-twice 必填（第二次运行之后用它判）。
+  // 例：{builtin: "wcmp"}；交互题或自定义运行省略。
   Checker checker = 7;
   // 交互器源码（testlib），只有交互题有。
+  // 例：{source: {sha256: "<interactor.cpp 摘要>", size: 2048}, language: "cpp23"}；非交互题省略。
   ProgramRef interactor = 8;
   // run-twice 的 manager 源码（testlib），只有 run-twice 有：读第一次运行的输出，往 stdout 写第二次运行的输入。
+  // 例：{source: {sha256: "<manager.cpp 摘要>", size: 3072}, language: "cpp23"}；非 run-twice 题省略。
   ProgramRef manager = 9;
 }
 
@@ -427,6 +452,7 @@ message Checker {
     // 内置 checker 名：wcmp（按 token 比，默认）、lcmp（按行比）、ncmp（整数序列）、rcmp4、rcmp6、rcmp9（浮点，绝对或相对误差 1e-4/1e-6/1e-9）、yesno。例："rcmp6"
     string builtin = 1;
     // 题目自带的 testlib checker 源码，调用方式 `checker <输入> <选手输出> <标准答案>`。
+    // 例：{source: {sha256: "<checker.cpp 摘要>", size: 4096}, language: "cpp23"}；使用 builtin 时不选此分支。
     ProgramRef custom = 2;
   }
 }
@@ -434,6 +460,7 @@ message Checker {
 // ProgramRef 指向一份题目自带的辅助程序源码（checker、交互器、manager），judgehost 拉下来后用固定参数编译（C++ testlib）并缓存。
 message ProgramRef {
   // 源码文件。
+  // 例：{sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08", size: 4096}（checker.cpp）。
   BlobRef source = 1;
   // 源码语言，alpha.1 只支持 cpp23。例："cpp23"
   string language = 2;
@@ -498,8 +525,10 @@ message ReportResultRequest {
   // 槽位 ID。例：11
   int64 slot_id = 3;
   // 编译结果。这个槽位为这个任务编译过（或者命中了编译缓存）就带；PyPy 这类不用编译的语言也带（ok=true、output 为空）。
+  // 例：{ok: true, cached: true, time_ms: 0}；尚未执行编译（如拉取输入失败直接报 SE）时省略。
   CompileResult compile = 4;
   // 这个测试点的运行结果，必填。编译失败时 verdict 为 VERDICT_COMPILATION_ERROR。
+  // 例：{verdict: VERDICT_COMPILATION_ERROR, reason_code: "compile_error"}（编译失败也必填）。
   RunResult run = 5;
 }
 
@@ -518,6 +547,7 @@ message CompileResult {
 // RunResult 是一个测试点的运行结果（T1 判因 + 资源用量 + 可选的 T2 提示和输出回传）。
 message RunResult {
   // 结论。
+  // 例：VERDICT_ACCEPTED（test-001 输出通过 wcmp）。
   Verdict verdict = 1;
   // 原因码，受控值；AC 时为空。全表见 renice-oj docs/ARCHITECTURE.md §5.4。例："stack_overflow"
   string reason_code = 2;
@@ -544,8 +574,10 @@ message RunResult {
   // 选手 stderr 的前 capture_stderr_bytes 字节；没要求回传时为空。例："debug: n=5\n"
   bytes stderr_head = 13;
   // T2 sanitizer 的提示；没跑 sanitizer 时不带。
+  // 例：{clean: false, kind: "global_overflow", line: 23}；未运行 sanitizer 时省略。
   SanitizerHint sanitizer = 14;
   // run-twice 时两次运行的明细（第一次、第二次各一项）；其他题型为空。time_ms、memory_kb 取两次的最大值。
+  // 例：[{index: 1, verdict: VERDICT_ACCEPTED, time_ms: 120}, {index: 2, verdict: VERDICT_ACCEPTED, time_ms: 95}]；第一轮失败只带第一项，其他题型为空。
   repeated SubRun sub_runs = 15;
 }
 
@@ -591,6 +623,7 @@ message SubRun {
   // 第几次运行：1 或 2。例：1
   int32 index = 1;
   // 这次运行的结论（第一次运行出了 RE、TLE 等，整个点就是这个结论，不再跑第二次）。
+  // 例：VERDICT_TIME_LIMIT_EXCEEDED（第一轮超时，第二轮不运行）。
   Verdict verdict = 2;
   // 原因码。例："cpu_time"
   string reason_code = 3;
