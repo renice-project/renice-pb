@@ -4,6 +4,8 @@
 
 ## 未发布
 
+- 修复判题机会话隔离：Hello 新增启动实例和会话代次，旧会话调用及延迟长轮询先拒绝；同次登记和领任务响应丢失重试保持幂等。
+
 - 新增 `renice.judge.v1.JudgeService`：renice-oj 服务端给判题机（renice-judge 的 judgehost）用的拉模型接口。Hello（登记机器和槽位、自检）、Heartbeat（整机心跳 + 声明式预热 pin_set）、ClaimTask（长轮询领一个测试点）、RenewLease / ReportResult（fencing token 租约，回报幂等）、FetchBlob（按 sha256 流式拉文件）。背景：判题机不碰 renice-oj 的数据库，只认这份契约（ADR：renice-oj 0002）。
 
 ## 2026-10-30

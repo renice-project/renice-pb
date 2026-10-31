@@ -343,7 +343,9 @@ type HelloRequest struct {
 	// 启动自检的每一项结果。服务端原样存下来给管理端看；有 fatal=true 且 ok=false 的项时拒绝上线。
 	SelfChecks []*SelfCheck `protobuf:"bytes,4,rep,name=self_checks,json=selfChecks,proto3" json:"self_checks,omitempty"`
 	// 判题机镜像里实际装好的语言和版本。服务端只给它派这里列出的语言。
-	Languages     []*LanguageInfo `protobuf:"bytes,5,rep,name=languages,proto3" json:"languages,omitempty"`
+	Languages []*LanguageInfo `protobuf:"bytes,5,rep,name=languages,proto3" json:"languages,omitempty"`
+	// 本次进程启动的随机 UUID；同次启动的 Hello 重试保持不变，新进程生成新值。例："b912b956-84d4-4534-a87d-559946868812"
+	InstanceId    string `protobuf:"bytes,6,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -413,6 +415,13 @@ func (x *HelloRequest) GetLanguages() []*LanguageInfo {
 	return nil
 }
 
+func (x *HelloRequest) GetInstanceId() string {
+	if x != nil {
+		return x.InstanceId
+	}
+	return ""
+}
+
 // HelloResponse 是 Hello 的出参。
 type HelloResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -428,8 +437,10 @@ type HelloResponse struct {
 	LeaseRenewSeconds int32 `protobuf:"varint,5,opt,name=lease_renew_seconds,json=leaseRenewSeconds,proto3" json:"lease_renew_seconds,omitempty"`
 	// ClaimTask 的 wait_seconds 最大能填多少。例：25
 	MaxClaimWaitSeconds int32 `protobuf:"varint,6,opt,name=max_claim_wait_seconds,json=maxClaimWaitSeconds,proto3" json:"max_claim_wait_seconds,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// 服务端分配的会话代次，后续调用在 metadata 的 x-judge-session-generation 原样携带。例：9
+	SessionGeneration int64 `protobuf:"varint,7,opt,name=session_generation,json=sessionGeneration,proto3" json:"session_generation,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *HelloResponse) Reset() {
@@ -500,6 +511,13 @@ func (x *HelloResponse) GetLeaseRenewSeconds() int32 {
 func (x *HelloResponse) GetMaxClaimWaitSeconds() int32 {
 	if x != nil {
 		return x.MaxClaimWaitSeconds
+	}
+	return 0
+}
+
+func (x *HelloResponse) GetSessionGeneration() int64 {
+	if x != nil {
+		return x.SessionGeneration
 	}
 	return 0
 }
@@ -1306,7 +1324,9 @@ type ClaimTaskRequest struct {
 	// 领任务的槽位。例：12
 	SlotId int64 `protobuf:"varint,1,opt,name=slot_id,json=slotId,proto3" json:"slot_id,omitempty"`
 	// 最多等多少秒，0 表示不等，超过 max_claim_wait_seconds 按上限算。例：25
-	WaitSeconds   int32 `protobuf:"varint,2,opt,name=wait_seconds,json=waitSeconds,proto3" json:"wait_seconds,omitempty"`
+	WaitSeconds int32 `protobuf:"varint,2,opt,name=wait_seconds,json=waitSeconds,proto3" json:"wait_seconds,omitempty"`
+	// 本次逻辑领任务的 UUID，响应未知时重试不变；同会话内不得用于另一轮领任务。例："97b673b5-9bcf-4b46-a2f8-fc38bfae6ccb"
+	RequestId     string `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1353,6 +1373,13 @@ func (x *ClaimTaskRequest) GetWaitSeconds() int32 {
 		return x.WaitSeconds
 	}
 	return 0
+}
+
+func (x *ClaimTaskRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
 }
 
 // ClaimTaskResponse 是 ClaimTask 的出参。
@@ -2852,14 +2879,16 @@ var File_renice_judge_v1_judge_proto protoreflect.FileDescriptor
 
 const file_renice_judge_v1_judge_proto_rawDesc = "" +
 	"\n" +
-	"\x1brenice/judge/v1/judge.proto\x12\x0frenice.judge.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x8b\x02\n" +
+	"\x1brenice/judge/v1/judge.proto\x12\x0frenice.judge.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xac\x02\n" +
 	"\fHelloRequest\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x126\n" +
 	"\amachine\x18\x02 \x01(\v2\x1c.renice.judge.v1.MachineInfoR\amachine\x12/\n" +
 	"\x05slots\x18\x03 \x03(\v2\x19.renice.judge.v1.SlotInfoR\x05slots\x12;\n" +
 	"\vself_checks\x18\x04 \x03(\v2\x1a.renice.judge.v1.SelfCheckR\n" +
 	"selfChecks\x12;\n" +
-	"\tlanguages\x18\x05 \x03(\v2\x1d.renice.judge.v1.LanguageInfoR\tlanguages\"\xad\x02\n" +
+	"\tlanguages\x18\x05 \x03(\v2\x1d.renice.judge.v1.LanguageInfoR\tlanguages\x12\x1f\n" +
+	"\vinstance_id\x18\x06 \x01(\tR\n" +
+	"instanceId\"\xdc\x02\n" +
 	"\rHelloResponse\x12\x1d\n" +
 	"\n" +
 	"machine_id\x18\x01 \x01(\x03R\tmachineId\x125\n" +
@@ -2867,7 +2896,8 @@ const file_renice_judge_v1_judge_proto_rawDesc = "" +
 	"\x1aheartbeat_interval_seconds\x18\x03 \x01(\x05R\x18heartbeatIntervalSeconds\x12#\n" +
 	"\rlease_seconds\x18\x04 \x01(\x05R\fleaseSeconds\x12.\n" +
 	"\x13lease_renew_seconds\x18\x05 \x01(\x05R\x11leaseRenewSeconds\x123\n" +
-	"\x16max_claim_wait_seconds\x18\x06 \x01(\x05R\x13maxClaimWaitSeconds\"\xcb\x01\n" +
+	"\x16max_claim_wait_seconds\x18\x06 \x01(\x05R\x13maxClaimWaitSeconds\x12-\n" +
+	"\x12session_generation\x18\a \x01(\x03R\x11sessionGeneration\"\xcb\x01\n" +
 	"\vMachineInfo\x12\x1a\n" +
 	"\bhostname\x18\x01 \x01(\tR\bhostname\x12\x16\n" +
 	"\x06kernel\x18\x02 \x01(\tR\x06kernel\x12\x1b\n" +
@@ -2927,10 +2957,12 @@ const file_renice_judge_v1_judge_proto_rawDesc = "" +
 	"\x06PinSet\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x03R\aversion\x12.\n" +
 	"\x05files\x18\x02 \x03(\v2\x18.renice.judge.v1.BlobRefR\x05files\x127\n" +
-	"\bprograms\x18\x03 \x03(\v2\x1b.renice.judge.v1.ProgramRefR\bprograms\"N\n" +
+	"\bprograms\x18\x03 \x03(\v2\x1b.renice.judge.v1.ProgramRefR\bprograms\"m\n" +
 	"\x10ClaimTaskRequest\x12\x17\n" +
 	"\aslot_id\x18\x01 \x01(\x03R\x06slotId\x12!\n" +
-	"\fwait_seconds\x18\x02 \x01(\x05R\vwaitSeconds\">\n" +
+	"\fwait_seconds\x18\x02 \x01(\x05R\vwaitSeconds\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x03 \x01(\tR\trequestId\">\n" +
 	"\x11ClaimTaskResponse\x12)\n" +
 	"\x04task\x18\x01 \x01(\v2\x15.renice.judge.v1.TaskR\x04task\"\xef\x04\n" +
 	"\x04Task\x12\x17\n" +

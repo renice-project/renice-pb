@@ -13,6 +13,12 @@ import "google/protobuf/timestamp.proto";
 // 鉴权：每次调用都在 gRPC metadata 里带 `authorization: Bearer <机器令牌>`。令牌在管理端「添加机器」时生成，
 // 一台机器一个，服务端只存它的 SHA-256。没带、不存在或已吊销 → UNAUTHENTICATED，judgehost 打印错误后以退出码 78 退出。
 //
+// 会话：Hello 以 instance_id 区分进程启动，返回 session_generation。除 Hello 外的每次调用都必须在
+// metadata 带 `x-judge-session-generation: <正整数十进制代次>`，包括 FetchBlob；缺失或格式错误 → INVALID_ARGUMENT。
+// 服务端在机器级锁内校验当前代次，再修改心跳、槽位或任务；旧代次 → FAILED_PRECONDITION「会话已失效」。
+// 旧进程收到此错误必须停掉全部运行并退出，不得自动生成新 instance_id 抢回会话；同一进程网络重连沿用原代次。
+// 机器登记数据丢失 → FAILED_PRECONDITION「机器未登记」，当前进程可用原 instance_id 重新 Hello。
+//
 // 调用顺序：
 // 1. 启动时调一次 Hello，上报机器信息、自检结果和槽位，拿到每个槽位的 slot_id。
 // 2. 之后每 heartbeat_interval_seconds 秒调一次 Heartbeat（整机一次，带上所有槽位的状态），顺便拿到「应该持有的文件集合」做预热。
@@ -26,12 +32,18 @@ import "google/protobuf/timestamp.proto";
 service JudgeService {
   // Hello 是判题机启动后的第一次调用：上报机器信息、各槽位、自检结果和支持的语言，服务端登记后返回每个槽位的 slot_id 和运行参数。
   //
-  // 同一台机器重复调用 Hello（例如容器重启）是正常的：服务端按 (机器, cpu) 复用原来的 slot_id，
-  // 并把这台机器上还处于「已领走」状态的任务全部放回队列（旧进程已经不在了，它们不会再被回报）。
+  // 每次进程启动生成一个随机 UUID instance_id，重试 Hello 时保持不变且请求内容相同。
+  // 服务端持久化 (机器, instance_id) 的登记结果和是否已被替代；记录保留到机器被删除。
+  // 当前 instance_id 的重试返回原 session_generation 和槽位映射，不回收任务、不增加代次；内容不同 → INVALID_ARGUMENT。
+  // 已被替代的 instance_id 再次 Hello → FAILED_PRECONDITION「会话已失效」，不得重新激活。
+  // 从未登记的新 instance_id：在机器级锁内原子增加持久化代次，替换当前会话，只回收旧会话的 leased 任务，
+  // 按 (机器, cpu) 复用 slot_id；此锁也覆盖其他调用的会话校验与写入，避免旧请求越过换代提交。
+  // 代次在服务端重启后仍单调递增且不复用；若机器数据重建也必须分配更大的代次。
+  // Hello 响应丢失后重试返回同一代次，不能撤销本会话后来领到的任务。
   //
   // 错误码：
   // - 自检里有 fatal=true 且 ok=false 的项 → FAILED_PRECONDITION，信息里列出没通过的项；judgehost 以退出码 78 退出。
-  // - slots 为空、cpu 重复 → INVALID_ARGUMENT。
+  // - instance_id 不是 UUID、slots 为空、cpu 重复 → INVALID_ARGUMENT。
   //
   // 业务例子：renice-main 的容器重启后再次 Hello，服务端把它刚才没回报完的 2 个任务放回队列，返回 slot_id 11、12。
   rpc Hello(HelloRequest) returns (HelloResponse);
@@ -41,7 +53,8 @@ service JudgeService {
   // 服务端超过 3 个心跳周期（默认 30 秒）没收到心跳，就把这台机器标为离线，并把它领走的任务放回队列。
   // 离线后再来的心跳会让它重新上线，不用重新 Hello；但被放回队列的任务已经不属于它，回报会被拒（见 ReportResult）。
   //
-  // 错误码：机器还没 Hello 过（例如服务端重建了数据）→ FAILED_PRECONDITION，judgehost 应该重新调 Hello。
+  // 错误码：机器未登记 → FAILED_PRECONDITION「机器未登记」；旧会话 → FAILED_PRECONDITION「会话已失效」。
+  // 只有当前会话的心跳能让机器重新上线，旧心跳不得刷新在线时间或槽位状态。
   //
   // 业务例子：管理员点了 akcup2027 的「预热」，下一次心跳就返回 pin_set（版本 7，共 64 个文件），judgehost 在后台拉齐，
   // 之后每次心跳上报进度 41 / 64。
@@ -51,7 +64,13 @@ service JudgeService {
   // 超时仍然没有任务就返回一个不带 task 的空响应，judgehost 立刻再调一次。
   //
   // 领走的同时生成租约：lease_token 是全局单调递增的 fencing token，之后的续约和回报都必须带它。
-  // 一个槽位同一时间只能持有一个任务：槽位上还有没回报的任务时再领，服务端先把那个旧任务放回队列（视为旧任务丢了）。
+  // 一个槽位同一时间只能持有一个任务：同一当前会话的新领任务请求会先把该槽位旧任务放回队列（视为丢了）。
+  // request_id 是本会话内一次逻辑领任务的 UUID；响应丢失重试必须原样复用它，不能生成新 ID。
+  // 服务端按 (机器, session_generation, request_id) 合并并发重试并保存原响应直到会话结束；参数改变 → INVALID_ARGUMENT。
+  // 重试返回原 task/token/到期时间或原空响应，不重新分配、不回收后续任务、不续约；空响应后下一轮使用新 ID。
+  // 每槽位只允许一个未确定响应的逻辑请求，确认后才能用新 ID 领下一任务。
+  // 长轮询在挂起前及每次唤醒实际分配前，都须在同一机器级锁内重新校验代次；旧会话先拒绝，不能碰新会话租约。
+  // 验收例：旧代次 8 挂起 → 新 Hello 得代次 9 → 新进程领到 B → 旧轮询唤醒被拒，B 的 token 和到期时间不变。
   //
   // 错误码：slot_id 不属于这台机器 → PERMISSION_DENIED；槽位被管理员停用 → FAILED_PRECONDITION（judgehost 让这个槽位歇着，等心跳里重新启用）。
   //
@@ -102,6 +121,8 @@ message HelloRequest {
   repeated SelfCheck self_checks = 4;
   // 判题机镜像里实际装好的语言和版本。服务端只给它派这里列出的语言。
   repeated LanguageInfo languages = 5;
+  // 本次进程启动的随机 UUID；同次启动的 Hello 重试保持不变，新进程生成新值。例："b912b956-84d4-4534-a87d-559946868812"
+  string instance_id = 6;
 }
 
 // HelloResponse 是 Hello 的出参。
@@ -118,6 +139,8 @@ message HelloResponse {
   int32 lease_renew_seconds = 5;
   // ClaimTask 的 wait_seconds 最大能填多少。例：25
   int32 max_claim_wait_seconds = 6;
+  // 服务端分配的会话代次，后续调用在 metadata 的 x-judge-session-generation 原样携带。例：9
+  int64 session_generation = 7;
 }
 
 // MachineInfo 是评测机器的静态信息。
@@ -272,6 +295,8 @@ message ClaimTaskRequest {
   int64 slot_id = 1;
   // 最多等多少秒，0 表示不等，超过 max_claim_wait_seconds 按上限算。例：25
   int32 wait_seconds = 2;
+  // 本次逻辑领任务的 UUID，响应未知时重试不变；同会话内不得用于另一轮领任务。例："97b673b5-9bcf-4b46-a2f8-fc38bfae6ccb"
+  string request_id = 3;
 }
 
 // ClaimTaskResponse 是 ClaimTask 的出参。
