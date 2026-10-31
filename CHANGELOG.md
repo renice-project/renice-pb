@@ -2,6 +2,10 @@
 
 > 状态：只追加。从 2026-10-30 起仓库不再打 tag（见 AGENTS.md 第 3 节），按日期记录合进 main 的改动。
 
+## 未发布
+
+- 新增 `renice.judge.v1.JudgeService`：renice-oj 服务端给判题机（renice-judge 的 judgehost）用的拉模型接口。Hello（登记机器和槽位、自检）、Heartbeat（整机心跳 + 声明式预热 pin_set）、ClaimTask（长轮询领一个测试点）、RenewLease / ReportResult（fencing token 租约，回报幂等）、FetchBlob（按 sha256 流式拉文件）。背景：判题机不碰 renice-oj 的数据库，只认这份契约（ADR：renice-oj 0002）。
+
 ## 2026-10-30
 
 - 新增 `renice.infra.v1.AgentService.Connect`：renice-infra（服务治理平台）的 agent 主动连服务端的双向流，握手（Hello / Welcome）、每 3 秒一次的主机与容器上报（Report / ReportAck，断线补传按 boot_id + seq 去重）、容器事件和主机静态信息。背景：agent 只出不进，命令以后也顺着这条流下发，本次只放采集需要的消息，发布、构建、探测、解析的命令在各自里程碑里加（ADR：renice-infra 0002）。
