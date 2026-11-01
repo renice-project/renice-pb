@@ -425,7 +425,7 @@ type ComposeFileWrite struct {
 	Kind ComposeFileKind `protobuf:"varint,4,opt,name=kind,proto3,enum=renice.infra.v1.ComposeFileKind" json:"kind,omitempty"`
 	// 完整的新内容，最多 256 KiB，必须是合法 UTF-8 且不含 NUL。例："services:\n  server:\n    image: ${SERVER_IMAGE:-…}\n"
 	Content string `protobuf:"bytes,5,opt,name=content,proto3" json:"content,omitempty"`
-	// 打开编辑器时读到的 base64 前的 sha256（十六进制小写）；文件原本不存在时传空串。例："9f2c…"
+	// 打开编辑器时读到的 sha256（十六进制小写）；文件原本不存在时传空串。例："9f2c…"
 	BaseSha256 string `protobuf:"bytes,6,opt,name=base_sha256,json=baseSha256,proto3" json:"base_sha256,omitempty"`
 	// 这个服务环境登记的镜像变量和 compose service，保存后用来跑镜像变量检查。例：[{env_var: "SERVER_IMAGE", compose_service: "server"}]
 	Images        []*ComposeImageExpect `protobuf:"bytes,7,rep,name=images,proto3" json:"images,omitempty"`
@@ -795,7 +795,7 @@ type ComposeImageCheck struct {
 	ComposeService string `protobuf:"bytes,2,opt,name=compose_service,json=composeService,proto3" json:"compose_service,omitempty"`
 	// 这个 service 的 image 是否等于用变量渲染出来的值。例：true
 	Ok bool `protobuf:"varint,3,opt,name=ok,proto3" json:"ok,omitempty"`
-	// 用探针值（或发布时的目标镜像）解析出来的实际 image；service 不存在或 config 失败时为空。例："renice-probe.invalid/server_image:check"
+	// 用探针值（或发布时的目标镜像）解析出来的实际 image；service 不存在时为空，config 失败见 ComposeFiles.config_error。例："renice-probe.invalid/server_image:check"
 	Image string `protobuf:"bytes,4,opt,name=image,proto3" json:"image,omitempty"`
 	// ok=false 时的中文原因，说清是没读到变量还是 compose 里没有这个 service。例："server 的 image 没有读 SERVER_IMAGE（解析出来是 renice-oj-test-server:dev）：要写成 ${SERVER_IMAGE:-…}，见 renice-template AGENTS「compose 规范」"
 	Message       string `protobuf:"bytes,5,opt,name=message,proto3" json:"message,omitempty"`
