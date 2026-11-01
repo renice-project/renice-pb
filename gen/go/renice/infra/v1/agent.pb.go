@@ -1946,7 +1946,7 @@ type Command struct {
 	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	// agent 端总超时，单位秒，0 使用类型默认值：日志 follow 不限时、发布 300、构建 1800、解析 30。例：300
 	TimeoutSeconds int32 `protobuf:"varint,2,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
-	// 命令内容按功能分号段：20–29 日志、30–39 发布、40–49 构建、50–59 解析。
+	// 命令内容按功能分号段：20–29 日志、30–39 发布、40–49 构建、50–59 解析、60–69 服务文件。
 	// 后续功能在各自号段内加字段，不用 reserved 占号段。
 	//
 	// Types that are valid to be assigned to Kind:
@@ -1958,6 +1958,8 @@ type Command struct {
 	//	*Command_DnsAddA
 	//	*Command_DnsSetA
 	//	*Command_DnsDelete
+	//	*Command_ComposeFilesRead
+	//	*Command_ComposeFileWrite
 	Kind          isCommand_Kind `protobuf_oneof:"kind"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2077,6 +2079,24 @@ func (x *Command) GetDnsDelete() *DnsDelete {
 	return nil
 }
 
+func (x *Command) GetComposeFilesRead() *ComposeFilesRead {
+	if x != nil {
+		if x, ok := x.Kind.(*Command_ComposeFilesRead); ok {
+			return x.ComposeFilesRead
+		}
+	}
+	return nil
+}
+
+func (x *Command) GetComposeFileWrite() *ComposeFileWrite {
+	if x != nil {
+		if x, ok := x.Kind.(*Command_ComposeFileWrite); ok {
+			return x.ComposeFileWrite
+		}
+	}
+	return nil
+}
+
 type isCommand_Kind interface {
 	isCommand_Kind()
 }
@@ -2116,6 +2136,16 @@ type Command_DnsDelete struct {
 	DnsDelete *DnsDelete `protobuf:"bytes,53,opt,name=dns_delete,json=dnsDelete,proto3,oneof"`
 }
 
+type Command_ComposeFilesRead struct {
+	// 读取某个服务环境的 compose 与 env 文件。例：{compose_dir: "/opt/renice-oj", compose_file: "deploy/docker-compose.yml", env_file: "deploy/.env"}
+	ComposeFilesRead *ComposeFilesRead `protobuf:"bytes,60,opt,name=compose_files_read,json=composeFilesRead,proto3,oneof"`
+}
+
+type Command_ComposeFileWrite struct {
+	// 在线改写某个服务环境的 compose 或 env 文件。例：{compose_dir: "/opt/renice-oj", compose_file: "deploy/docker-compose.yml", kind: COMPOSE_FILE_KIND_COMPOSE, content: "services:…", base_sha256: "9f2c…"}
+	ComposeFileWrite *ComposeFileWrite `protobuf:"bytes,61,opt,name=compose_file_write,json=composeFileWrite,proto3,oneof"`
+}
+
 func (*Command_LogTail) isCommand_Kind() {}
 
 func (*Command_Deploy) isCommand_Kind() {}
@@ -2130,6 +2160,10 @@ func (*Command_DnsSetA) isCommand_Kind() {}
 
 func (*Command_DnsDelete) isCommand_Kind() {}
 
+func (*Command_ComposeFilesRead) isCommand_Kind() {}
+
+func (*Command_ComposeFileWrite) isCommand_Kind() {}
+
 // CommandResult 是 agent 对命令的一条最终结果，正常连接内恰好一条；断线时不回、不补传。
 // OK 时 error 为空；其他状态必须给出可读的中文原因，不能泄露密码或 token。
 type CommandResult struct {
@@ -2142,7 +2176,7 @@ type CommandResult struct {
 	Error string `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
 	// 命令结束的时间。例：2026-10-31T16:25:00+08:00
 	FinishedAt *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`
-	// 结果按与 Command.kind 相同的功能号段分配：20–29 日志（无 detail）、30–39 发布、40–49 构建、50–59 解析。
+	// 结果按与 Command.kind 相同的功能号段分配：20–29 日志（无 detail）、30–39 发布、40–49 构建、50–59 解析、60–69 服务文件。
 	//
 	// Types that are valid to be assigned to Detail:
 	//
@@ -2150,6 +2184,8 @@ type CommandResult struct {
 	//	*CommandResult_Build
 	//	*CommandResult_DnsRecords
 	//	*CommandResult_DnsChange
+	//	*CommandResult_ComposeFiles
+	//	*CommandResult_ComposeFileWritten
 	Detail        isCommandResult_Detail `protobuf_oneof:"detail"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2256,6 +2292,24 @@ func (x *CommandResult) GetDnsChange() *DnsChange {
 	return nil
 }
 
+func (x *CommandResult) GetComposeFiles() *ComposeFiles {
+	if x != nil {
+		if x, ok := x.Detail.(*CommandResult_ComposeFiles); ok {
+			return x.ComposeFiles
+		}
+	}
+	return nil
+}
+
+func (x *CommandResult) GetComposeFileWritten() *ComposeFileWritten {
+	if x != nil {
+		if x, ok := x.Detail.(*CommandResult_ComposeFileWritten); ok {
+			return x.ComposeFileWritten
+		}
+	}
+	return nil
+}
+
 type isCommandResult_Detail interface {
 	isCommandResult_Detail()
 }
@@ -2280,6 +2334,16 @@ type CommandResult_DnsChange struct {
 	DnsChange *DnsChange `protobuf:"bytes,51,opt,name=dns_change,json=dnsChange,proto3,oneof"`
 }
 
+type CommandResult_ComposeFiles struct {
+	// 读取 compose / env 文件的结果，对应 ComposeFilesRead。例：{compose: {path: "deploy/docker-compose.yml", exists: true, sha256: "9f2c…"}}
+	ComposeFiles *ComposeFiles `protobuf:"bytes,60,opt,name=compose_files,json=composeFiles,proto3,oneof"`
+}
+
+type CommandResult_ComposeFileWritten struct {
+	// 写入结果，对应 ComposeFileWrite。例：{sha256: "9f2c…", backup_path: "/var/lib/renice-agent/file-backups/opt_renice-oj/docker-compose.yml.20261101T082000Z"}
+	ComposeFileWritten *ComposeFileWritten `protobuf:"bytes,61,opt,name=compose_file_written,json=composeFileWritten,proto3,oneof"`
+}
+
 func (*CommandResult_Deploy) isCommandResult_Detail() {}
 
 func (*CommandResult_Build) isCommandResult_Detail() {}
@@ -2287,6 +2351,10 @@ func (*CommandResult_Build) isCommandResult_Detail() {}
 func (*CommandResult_DnsRecords) isCommandResult_Detail() {}
 
 func (*CommandResult_DnsChange) isCommandResult_Detail() {}
+
+func (*CommandResult_ComposeFiles) isCommandResult_Detail() {}
+
+func (*CommandResult_ComposeFileWritten) isCommandResult_Detail() {}
 
 // CommandOutput 是命令执行中的一批文本输出；agent 攒最多 200 行或 500ms 就发一批，以先到者为准。
 // 输出不补传，凭据必须先脱敏；最终结果在最后一批输出之后发送。
@@ -2684,7 +2752,7 @@ const file_renice_infra_v1_agent_proto_rawDesc = "" +
 	"occurredAt\"4\n" +
 	"\tReportAck\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x10\n" +
-	"\x03seq\x18\x02 \x01(\x03R\x03seq\"\xc8\x03\n" +
+	"\x03seq\x18\x02 \x01(\x03R\x03seq\"\xee\x04\n" +
 	"\aCommand\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12'\n" +
 	"\x0ftimeout_seconds\x18\x02 \x01(\x05R\x0etimeoutSeconds\x125\n" +
@@ -2695,8 +2763,10 @@ const file_renice_infra_v1_agent_proto_rawDesc = "" +
 	"\tdns_add_a\x183 \x01(\v2\x18.renice.infra.v1.DnsAddAH\x00R\adnsAddA\x126\n" +
 	"\tdns_set_a\x184 \x01(\v2\x18.renice.infra.v1.DnsSetAH\x00R\adnsSetA\x12;\n" +
 	"\n" +
-	"dns_delete\x185 \x01(\v2\x1a.renice.infra.v1.DnsDeleteH\x00R\tdnsDeleteB\x06\n" +
-	"\x04kind\"\xa0\x03\n" +
+	"dns_delete\x185 \x01(\v2\x1a.renice.infra.v1.DnsDeleteH\x00R\tdnsDelete\x12Q\n" +
+	"\x12compose_files_read\x18< \x01(\v2!.renice.infra.v1.ComposeFilesReadH\x00R\x10composeFilesRead\x12Q\n" +
+	"\x12compose_file_write\x18= \x01(\v2!.renice.infra.v1.ComposeFileWriteH\x00R\x10composeFileWriteB\x06\n" +
+	"\x04kind\"\xbf\x04\n" +
 	"\rCommandResult\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x126\n" +
 	"\x06status\x18\x02 \x01(\x0e2\x1e.renice.infra.v1.CommandStatusR\x06status\x12\x14\n" +
@@ -2708,7 +2778,9 @@ const file_renice_infra_v1_agent_proto_rawDesc = "" +
 	"\vdns_records\x182 \x01(\v2\x1b.renice.infra.v1.DnsRecordsH\x00R\n" +
 	"dnsRecords\x12;\n" +
 	"\n" +
-	"dns_change\x183 \x01(\v2\x1a.renice.infra.v1.DnsChangeH\x00R\tdnsChangeB\b\n" +
+	"dns_change\x183 \x01(\v2\x1a.renice.infra.v1.DnsChangeH\x00R\tdnsChange\x12D\n" +
+	"\rcompose_files\x18< \x01(\v2\x1d.renice.infra.v1.ComposeFilesH\x00R\fcomposeFiles\x12W\n" +
+	"\x14compose_file_written\x18= \x01(\v2#.renice.infra.v1.ComposeFileWrittenH\x00R\x12composeFileWrittenB\b\n" +
 	"\x06detail\"d\n" +
 	"\rCommandOutput\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x10\n" +
@@ -2818,10 +2890,14 @@ var file_renice_infra_v1_agent_proto_goTypes = []any{
 	(*DnsAddA)(nil),               // 32: renice.infra.v1.DnsAddA
 	(*DnsSetA)(nil),               // 33: renice.infra.v1.DnsSetA
 	(*DnsDelete)(nil),             // 34: renice.infra.v1.DnsDelete
-	(*BuildResult)(nil),           // 35: renice.infra.v1.BuildResult
-	(*DnsRecords)(nil),            // 36: renice.infra.v1.DnsRecords
-	(*DnsChange)(nil),             // 37: renice.infra.v1.DnsChange
-	(*OutputLine)(nil),            // 38: renice.infra.v1.OutputLine
+	(*ComposeFilesRead)(nil),      // 35: renice.infra.v1.ComposeFilesRead
+	(*ComposeFileWrite)(nil),      // 36: renice.infra.v1.ComposeFileWrite
+	(*BuildResult)(nil),           // 37: renice.infra.v1.BuildResult
+	(*DnsRecords)(nil),            // 38: renice.infra.v1.DnsRecords
+	(*DnsChange)(nil),             // 39: renice.infra.v1.DnsChange
+	(*ComposeFiles)(nil),          // 40: renice.infra.v1.ComposeFiles
+	(*ComposeFileWritten)(nil),    // 41: renice.infra.v1.ComposeFileWritten
+	(*OutputLine)(nil),            // 42: renice.infra.v1.OutputLine
 }
 var file_renice_infra_v1_agent_proto_depIdxs = []int32{
 	7,  // 0: renice.infra.v1.ConnectRequest.hello:type_name -> renice.infra.v1.Hello
@@ -2861,22 +2937,26 @@ var file_renice_infra_v1_agent_proto_depIdxs = []int32{
 	32, // 34: renice.infra.v1.Command.dns_add_a:type_name -> renice.infra.v1.DnsAddA
 	33, // 35: renice.infra.v1.Command.dns_set_a:type_name -> renice.infra.v1.DnsSetA
 	34, // 36: renice.infra.v1.Command.dns_delete:type_name -> renice.infra.v1.DnsDelete
-	4,  // 37: renice.infra.v1.CommandResult.status:type_name -> renice.infra.v1.CommandStatus
-	27, // 38: renice.infra.v1.CommandResult.finished_at:type_name -> google.protobuf.Timestamp
-	23, // 39: renice.infra.v1.CommandResult.deploy:type_name -> renice.infra.v1.DeployResult
-	35, // 40: renice.infra.v1.CommandResult.build:type_name -> renice.infra.v1.BuildResult
-	36, // 41: renice.infra.v1.CommandResult.dns_records:type_name -> renice.infra.v1.DnsRecords
-	37, // 42: renice.infra.v1.CommandResult.dns_change:type_name -> renice.infra.v1.DnsChange
-	38, // 43: renice.infra.v1.CommandOutput.lines:type_name -> renice.infra.v1.OutputLine
-	24, // 44: renice.infra.v1.DeployResult.containers:type_name -> renice.infra.v1.DeployedContainer
-	2,  // 45: renice.infra.v1.DeployedContainer.health:type_name -> renice.infra.v1.ContainerHealth
-	5,  // 46: renice.infra.v1.AgentService.Connect:input_type -> renice.infra.v1.ConnectRequest
-	6,  // 47: renice.infra.v1.AgentService.Connect:output_type -> renice.infra.v1.ConnectResponse
-	47, // [47:48] is the sub-list for method output_type
-	46, // [46:47] is the sub-list for method input_type
-	46, // [46:46] is the sub-list for extension type_name
-	46, // [46:46] is the sub-list for extension extendee
-	0,  // [0:46] is the sub-list for field type_name
+	35, // 37: renice.infra.v1.Command.compose_files_read:type_name -> renice.infra.v1.ComposeFilesRead
+	36, // 38: renice.infra.v1.Command.compose_file_write:type_name -> renice.infra.v1.ComposeFileWrite
+	4,  // 39: renice.infra.v1.CommandResult.status:type_name -> renice.infra.v1.CommandStatus
+	27, // 40: renice.infra.v1.CommandResult.finished_at:type_name -> google.protobuf.Timestamp
+	23, // 41: renice.infra.v1.CommandResult.deploy:type_name -> renice.infra.v1.DeployResult
+	37, // 42: renice.infra.v1.CommandResult.build:type_name -> renice.infra.v1.BuildResult
+	38, // 43: renice.infra.v1.CommandResult.dns_records:type_name -> renice.infra.v1.DnsRecords
+	39, // 44: renice.infra.v1.CommandResult.dns_change:type_name -> renice.infra.v1.DnsChange
+	40, // 45: renice.infra.v1.CommandResult.compose_files:type_name -> renice.infra.v1.ComposeFiles
+	41, // 46: renice.infra.v1.CommandResult.compose_file_written:type_name -> renice.infra.v1.ComposeFileWritten
+	42, // 47: renice.infra.v1.CommandOutput.lines:type_name -> renice.infra.v1.OutputLine
+	24, // 48: renice.infra.v1.DeployResult.containers:type_name -> renice.infra.v1.DeployedContainer
+	2,  // 49: renice.infra.v1.DeployedContainer.health:type_name -> renice.infra.v1.ContainerHealth
+	5,  // 50: renice.infra.v1.AgentService.Connect:input_type -> renice.infra.v1.ConnectRequest
+	6,  // 51: renice.infra.v1.AgentService.Connect:output_type -> renice.infra.v1.ConnectResponse
+	51, // [51:52] is the sub-list for method output_type
+	50, // [50:51] is the sub-list for method input_type
+	50, // [50:50] is the sub-list for extension type_name
+	50, // [50:50] is the sub-list for extension extendee
+	0,  // [0:50] is the sub-list for field type_name
 }
 
 func init() { file_renice_infra_v1_agent_proto_init() }
@@ -2914,12 +2994,16 @@ func file_renice_infra_v1_agent_proto_init() {
 		(*Command_DnsAddA)(nil),
 		(*Command_DnsSetA)(nil),
 		(*Command_DnsDelete)(nil),
+		(*Command_ComposeFilesRead)(nil),
+		(*Command_ComposeFileWrite)(nil),
 	}
 	file_renice_infra_v1_agent_proto_msgTypes[15].OneofWrappers = []any{
 		(*CommandResult_Deploy)(nil),
 		(*CommandResult_Build)(nil),
 		(*CommandResult_DnsRecords)(nil),
 		(*CommandResult_DnsChange)(nil),
+		(*CommandResult_ComposeFiles)(nil),
+		(*CommandResult_ComposeFileWritten)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
