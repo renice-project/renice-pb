@@ -9,6 +9,7 @@ package infrav1
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -20,6 +21,59 @@ const (
 	// Verify that runtime/protoimpl is sufficiently up-to-date.
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
+
+// ComposeFileKind 是要编辑的文件种类，决定写文件时的权限位和校验方式。
+type ComposeFileKind int32
+
+const (
+	// 未指定，服务端不会下发。
+	ComposeFileKind_COMPOSE_FILE_KIND_UNSPECIFIED ComposeFileKind = 0
+	// compose 文件，新建时权限 0644。例："deploy/docker-compose.yml"
+	ComposeFileKind_COMPOSE_FILE_KIND_COMPOSE ComposeFileKind = 1
+	// 环境的运行配置 env 文件，新建时权限 0600。例："deploy/.env"
+	ComposeFileKind_COMPOSE_FILE_KIND_ENV ComposeFileKind = 2
+)
+
+// Enum value maps for ComposeFileKind.
+var (
+	ComposeFileKind_name = map[int32]string{
+		0: "COMPOSE_FILE_KIND_UNSPECIFIED",
+		1: "COMPOSE_FILE_KIND_COMPOSE",
+		2: "COMPOSE_FILE_KIND_ENV",
+	}
+	ComposeFileKind_value = map[string]int32{
+		"COMPOSE_FILE_KIND_UNSPECIFIED": 0,
+		"COMPOSE_FILE_KIND_COMPOSE":     1,
+		"COMPOSE_FILE_KIND_ENV":         2,
+	}
+)
+
+func (x ComposeFileKind) Enum() *ComposeFileKind {
+	p := new(ComposeFileKind)
+	*p = x
+	return p
+}
+
+func (x ComposeFileKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ComposeFileKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_renice_infra_v1_deploy_proto_enumTypes[0].Descriptor()
+}
+
+func (ComposeFileKind) Type() protoreflect.EnumType {
+	return &file_renice_infra_v1_deploy_proto_enumTypes[0]
+}
+
+func (x ComposeFileKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ComposeFileKind.Descriptor instead.
+func (ComposeFileKind) EnumDescriptor() ([]byte, []int) {
+	return file_renice_infra_v1_deploy_proto_rawDescGZIP(), []int{0}
+}
 
 // Deploy 是服务端下发的发布命令，不需要额外角色；默认总超时 300 秒。
 // 同一个 compose 目录最多一个发布，第二个拒绝为 REJECTED「该 compose 目录已有发布在跑」。
@@ -223,11 +277,666 @@ func (x *ImageRef) GetImage() string {
 	return ""
 }
 
+// ComposeImageExpect 是一个镜像变量和它应该被哪个 compose service 引用。
+// 一个镜像被多个 compose service 共用时，每个 service 一条。
+type ComposeImageExpect struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// compose 文件里的镜像变量名，必须写成 ${变量}。例："SERVER_IMAGE"
+	EnvVar string `protobuf:"bytes,1,opt,name=env_var,json=envVar,proto3" json:"env_var,omitempty"`
+	// compose 文件中的服务名。例："server"
+	ComposeService string `protobuf:"bytes,2,opt,name=compose_service,json=composeService,proto3" json:"compose_service,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *ComposeImageExpect) Reset() {
+	*x = ComposeImageExpect{}
+	mi := &file_renice_infra_v1_deploy_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ComposeImageExpect) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ComposeImageExpect) ProtoMessage() {}
+
+func (x *ComposeImageExpect) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_infra_v1_deploy_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ComposeImageExpect.ProtoReflect.Descriptor instead.
+func (*ComposeImageExpect) Descriptor() ([]byte, []int) {
+	return file_renice_infra_v1_deploy_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ComposeImageExpect) GetEnvVar() string {
+	if x != nil {
+		return x.EnvVar
+	}
+	return ""
+}
+
+func (x *ComposeImageExpect) GetComposeService() string {
+	if x != nil {
+		return x.ComposeService
+	}
+	return ""
+}
+
+// ComposeFilesRead 是读取某个服务环境的 compose 文件和 env 文件，不需要额外角色；默认总超时 30 秒。
+// 除了文件内容，还回传摘要、修改时间、所在目录的 git 状态，并对当前文件跑一次镜像变量检查。
+// 读的时候也拿 compose 目录的发布锁：有发布在跑时拒绝为 REJECTED「该 compose 目录有发布在跑，稍后再试」。
+// 命令输出和日志里不会出现文件内容，只记命令 id、种类、路径和摘要。
+type ComposeFilesRead struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// compose 项目所在目录，必须是绝对路径，两个文件都必须在这个目录里。例："/opt/renice-oj"
+	ComposeDir string `protobuf:"bytes,1,opt,name=compose_dir,json=composeDir,proto3" json:"compose_dir,omitempty"`
+	// 相对 compose_dir 的 compose 文件路径。例："deploy/docker-compose.yml"
+	ComposeFile string `protobuf:"bytes,2,opt,name=compose_file,json=composeFile,proto3" json:"compose_file,omitempty"`
+	// 相对 compose_dir 的 env 文件路径；空表示这个环境没有 env 文件。例："deploy/.env"
+	EnvFile string `protobuf:"bytes,3,opt,name=env_file,json=envFile,proto3" json:"env_file,omitempty"`
+	// 这个服务环境登记的镜像变量和 compose service，用来逐条检查 image 是否真的读了变量。
+	// 例：[{env_var: "SERVER_IMAGE", compose_service: "server"}, {env_var: "SERVER_IMAGE", compose_service: "worker"}]
+	Images        []*ComposeImageExpect `protobuf:"bytes,4,rep,name=images,proto3" json:"images,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ComposeFilesRead) Reset() {
+	*x = ComposeFilesRead{}
+	mi := &file_renice_infra_v1_deploy_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ComposeFilesRead) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ComposeFilesRead) ProtoMessage() {}
+
+func (x *ComposeFilesRead) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_infra_v1_deploy_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ComposeFilesRead.ProtoReflect.Descriptor instead.
+func (*ComposeFilesRead) Descriptor() ([]byte, []int) {
+	return file_renice_infra_v1_deploy_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *ComposeFilesRead) GetComposeDir() string {
+	if x != nil {
+		return x.ComposeDir
+	}
+	return ""
+}
+
+func (x *ComposeFilesRead) GetComposeFile() string {
+	if x != nil {
+		return x.ComposeFile
+	}
+	return ""
+}
+
+func (x *ComposeFilesRead) GetEnvFile() string {
+	if x != nil {
+		return x.EnvFile
+	}
+	return ""
+}
+
+func (x *ComposeFilesRead) GetImages() []*ComposeImageExpect {
+	if x != nil {
+		return x.Images
+	}
+	return nil
+}
+
+// ComposeFileWrite 是在线改写某个服务环境的 compose 文件或 env 文件，不需要额外角色；默认总超时 30 秒。
+// 先比对 base_sha256，不一致返回 REJECTED「conflict: …」；再写临时文件、用 docker compose config 校验、
+// 备份原文件、原子替换，最后对新文件跑一次镜像变量检查。不执行 up，也不重启任何容器。
+type ComposeFileWrite struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// compose 项目所在目录，必须是绝对路径，两个文件都必须在这个目录里。例："/opt/renice-oj"
+	ComposeDir string `protobuf:"bytes,1,opt,name=compose_dir,json=composeDir,proto3" json:"compose_dir,omitempty"`
+	// 相对 compose_dir 的 compose 文件路径。例："deploy/docker-compose.yml"
+	ComposeFile string `protobuf:"bytes,2,opt,name=compose_file,json=composeFile,proto3" json:"compose_file,omitempty"`
+	// 相对 compose_dir 的 env 文件路径；空表示这个环境没有 env 文件，此时写 env 直接 REJECTED。例："deploy/.env"
+	EnvFile string `protobuf:"bytes,3,opt,name=env_file,json=envFile,proto3" json:"env_file,omitempty"`
+	// 这次写的是哪一个文件。例：COMPOSE_FILE_KIND_COMPOSE
+	Kind ComposeFileKind `protobuf:"varint,4,opt,name=kind,proto3,enum=renice.infra.v1.ComposeFileKind" json:"kind,omitempty"`
+	// 完整的新内容，最多 256 KiB，必须是合法 UTF-8 且不含 NUL。例："services:\n  server:\n    image: ${SERVER_IMAGE:-…}\n"
+	Content string `protobuf:"bytes,5,opt,name=content,proto3" json:"content,omitempty"`
+	// 打开编辑器时读到的 base64 前的 sha256（十六进制小写）；文件原本不存在时传空串。例："9f2c…"
+	BaseSha256 string `protobuf:"bytes,6,opt,name=base_sha256,json=baseSha256,proto3" json:"base_sha256,omitempty"`
+	// 这个服务环境登记的镜像变量和 compose service，保存后用来跑镜像变量检查。例：[{env_var: "SERVER_IMAGE", compose_service: "server"}]
+	Images        []*ComposeImageExpect `protobuf:"bytes,7,rep,name=images,proto3" json:"images,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ComposeFileWrite) Reset() {
+	*x = ComposeFileWrite{}
+	mi := &file_renice_infra_v1_deploy_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ComposeFileWrite) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ComposeFileWrite) ProtoMessage() {}
+
+func (x *ComposeFileWrite) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_infra_v1_deploy_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ComposeFileWrite.ProtoReflect.Descriptor instead.
+func (*ComposeFileWrite) Descriptor() ([]byte, []int) {
+	return file_renice_infra_v1_deploy_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *ComposeFileWrite) GetComposeDir() string {
+	if x != nil {
+		return x.ComposeDir
+	}
+	return ""
+}
+
+func (x *ComposeFileWrite) GetComposeFile() string {
+	if x != nil {
+		return x.ComposeFile
+	}
+	return ""
+}
+
+func (x *ComposeFileWrite) GetEnvFile() string {
+	if x != nil {
+		return x.EnvFile
+	}
+	return ""
+}
+
+func (x *ComposeFileWrite) GetKind() ComposeFileKind {
+	if x != nil {
+		return x.Kind
+	}
+	return ComposeFileKind_COMPOSE_FILE_KIND_UNSPECIFIED
+}
+
+func (x *ComposeFileWrite) GetContent() string {
+	if x != nil {
+		return x.Content
+	}
+	return ""
+}
+
+func (x *ComposeFileWrite) GetBaseSha256() string {
+	if x != nil {
+		return x.BaseSha256
+	}
+	return ""
+}
+
+func (x *ComposeFileWrite) GetImages() []*ComposeImageExpect {
+	if x != nil {
+		return x.Images
+	}
+	return nil
+}
+
+// ComposeFiles 是读取命令的结果：两个文件、所在目录的 git 状态和镜像变量检查。
+type ComposeFiles struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// compose 文件的当前内容。例：{path: "deploy/docker-compose.yml", exists: true, sha256: "9f2c…", size: 812}
+	Compose *ComposeFileContent `protobuf:"bytes,1,opt,name=compose,proto3" json:"compose,omitempty"`
+	// env 文件的当前内容；env_file 为空时 exists=false。例：{path: "deploy/.env", exists: true, sha256: "41ab…", size: 256, mode: 384}
+	Env *ComposeFileContent `protobuf:"bytes,2,opt,name=env,proto3" json:"env,omitempty"`
+	// compose 目录的 git 信息；目录不是 git 仓库或机器上没有 git 时 available=false。
+	Git *ComposeGit `protobuf:"bytes,3,opt,name=git,proto3" json:"git,omitempty"`
+	// 逐条镜像变量检查结果。例：[{env_var: "SERVER_IMAGE", compose_service: "server", ok: true, image: "renice-probe.invalid/server_image:check"}]
+	ImageChecks []*ComposeImageCheck `protobuf:"bytes,4,rep,name=image_checks,json=imageChecks,proto3" json:"image_checks,omitempty"`
+	// docker compose config 对当前文件报的错，正常时为空；有错也照常返回文件内容，不算命令失败。例："services.server.image must be a string"
+	ConfigError   string `protobuf:"bytes,5,opt,name=config_error,json=configError,proto3" json:"config_error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ComposeFiles) Reset() {
+	*x = ComposeFiles{}
+	mi := &file_renice_infra_v1_deploy_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ComposeFiles) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ComposeFiles) ProtoMessage() {}
+
+func (x *ComposeFiles) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_infra_v1_deploy_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ComposeFiles.ProtoReflect.Descriptor instead.
+func (*ComposeFiles) Descriptor() ([]byte, []int) {
+	return file_renice_infra_v1_deploy_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *ComposeFiles) GetCompose() *ComposeFileContent {
+	if x != nil {
+		return x.Compose
+	}
+	return nil
+}
+
+func (x *ComposeFiles) GetEnv() *ComposeFileContent {
+	if x != nil {
+		return x.Env
+	}
+	return nil
+}
+
+func (x *ComposeFiles) GetGit() *ComposeGit {
+	if x != nil {
+		return x.Git
+	}
+	return nil
+}
+
+func (x *ComposeFiles) GetImageChecks() []*ComposeImageCheck {
+	if x != nil {
+		return x.ImageChecks
+	}
+	return nil
+}
+
+func (x *ComposeFiles) GetConfigError() string {
+	if x != nil {
+		return x.ConfigError
+	}
+	return ""
+}
+
+// ComposeFileContent 是一个文件的当前状态。不存在时 exists=false，content 和 sha256 为空。
+type ComposeFileContent struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 相对 compose_dir 的路径。例："deploy/docker-compose.yml"
+	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	// 文件是否存在。例：true
+	Exists bool `protobuf:"varint,2,opt,name=exists,proto3" json:"exists,omitempty"`
+	// 完整内容（UTF-8）；不存在时为空。例："services:\n  server:\n    image: ${SERVER_IMAGE:-…}\n"
+	Content string `protobuf:"bytes,3,opt,name=content,proto3" json:"content,omitempty"`
+	// 内容的 sha256，十六进制小写；空文件也有值，不存在时为空。例："9f2c1e…"
+	Sha256 string `protobuf:"bytes,4,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	// 文件大小，字节。例：812
+	Size int64 `protobuf:"varint,5,opt,name=size,proto3" json:"size,omitempty"`
+	// 最后修改时间；不存在时不带。例：2026-11-01T16:20:00+08:00
+	ModifiedAt *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=modified_at,json=modifiedAt,proto3" json:"modified_at,omitempty"`
+	// 权限位（不含文件类型），例如 0644 是 420；不存在时为 0。例：420
+	Mode          uint32 `protobuf:"varint,7,opt,name=mode,proto3" json:"mode,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ComposeFileContent) Reset() {
+	*x = ComposeFileContent{}
+	mi := &file_renice_infra_v1_deploy_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ComposeFileContent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ComposeFileContent) ProtoMessage() {}
+
+func (x *ComposeFileContent) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_infra_v1_deploy_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ComposeFileContent.ProtoReflect.Descriptor instead.
+func (*ComposeFileContent) Descriptor() ([]byte, []int) {
+	return file_renice_infra_v1_deploy_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *ComposeFileContent) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *ComposeFileContent) GetExists() bool {
+	if x != nil {
+		return x.Exists
+	}
+	return false
+}
+
+func (x *ComposeFileContent) GetContent() string {
+	if x != nil {
+		return x.Content
+	}
+	return ""
+}
+
+func (x *ComposeFileContent) GetSha256() string {
+	if x != nil {
+		return x.Sha256
+	}
+	return ""
+}
+
+func (x *ComposeFileContent) GetSize() int64 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
+}
+
+func (x *ComposeFileContent) GetModifiedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ModifiedAt
+	}
+	return nil
+}
+
+func (x *ComposeFileContent) GetMode() uint32 {
+	if x != nil {
+		return x.Mode
+	}
+	return 0
+}
+
+// ComposeGit 是 compose 目录的 git 状态，用来提醒把平台上的改动补回仓库。
+// 不是 git 仓库或机器上没有 git 时 available=false，其余字段为空，不算错误。
+type ComposeGit struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 是否取得了 git 信息。例：true
+	Available bool `protobuf:"varint,1,opt,name=available,proto3" json:"available,omitempty"`
+	// 当前分支名。例："dev"
+	Branch string `protobuf:"bytes,2,opt,name=branch,proto3" json:"branch,omitempty"`
+	// 当前提交的短 hash。例："209be9d"
+	Head string `protobuf:"bytes,3,opt,name=head,proto3" json:"head,omitempty"`
+	// compose 文件相对 HEAD 是否有未提交改动（git status --porcelain 非空）。例：true
+	ComposeDirty bool `protobuf:"varint,4,opt,name=compose_dirty,json=composeDirty,proto3" json:"compose_dirty,omitempty"`
+	// compose 文件相对 HEAD 的 unified diff，最多 64 KiB，超出截断并在末尾写「…（diff 过长已截断）」。例："--- a/deploy/docker-compose.yml\n+++ b/deploy/docker-compose.yml\n"
+	ComposeDiff string `protobuf:"bytes,5,opt,name=compose_diff,json=composeDiff,proto3" json:"compose_diff,omitempty"`
+	// env 文件是否被 git 跟踪（git ls-files --error-unmatch 成功）。例：false
+	EnvTracked    bool `protobuf:"varint,6,opt,name=env_tracked,json=envTracked,proto3" json:"env_tracked,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ComposeGit) Reset() {
+	*x = ComposeGit{}
+	mi := &file_renice_infra_v1_deploy_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ComposeGit) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ComposeGit) ProtoMessage() {}
+
+func (x *ComposeGit) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_infra_v1_deploy_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ComposeGit.ProtoReflect.Descriptor instead.
+func (*ComposeGit) Descriptor() ([]byte, []int) {
+	return file_renice_infra_v1_deploy_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ComposeGit) GetAvailable() bool {
+	if x != nil {
+		return x.Available
+	}
+	return false
+}
+
+func (x *ComposeGit) GetBranch() string {
+	if x != nil {
+		return x.Branch
+	}
+	return ""
+}
+
+func (x *ComposeGit) GetHead() string {
+	if x != nil {
+		return x.Head
+	}
+	return ""
+}
+
+func (x *ComposeGit) GetComposeDirty() bool {
+	if x != nil {
+		return x.ComposeDirty
+	}
+	return false
+}
+
+func (x *ComposeGit) GetComposeDiff() string {
+	if x != nil {
+		return x.ComposeDiff
+	}
+	return ""
+}
+
+func (x *ComposeGit) GetEnvTracked() bool {
+	if x != nil {
+		return x.EnvTracked
+	}
+	return false
+}
+
+// ComposeImageCheck 是一条镜像变量检查结果：用探针值渲染 compose 后，看这个 compose service 的 image 有没有读到变量。
+type ComposeImageCheck struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 被检查的镜像变量名。例："SERVER_IMAGE"
+	EnvVar string `protobuf:"bytes,1,opt,name=env_var,json=envVar,proto3" json:"env_var,omitempty"`
+	// 被点名的 compose service。例："server"
+	ComposeService string `protobuf:"bytes,2,opt,name=compose_service,json=composeService,proto3" json:"compose_service,omitempty"`
+	// 这个 service 的 image 是否等于用变量渲染出来的值。例：true
+	Ok bool `protobuf:"varint,3,opt,name=ok,proto3" json:"ok,omitempty"`
+	// 用探针值（或发布时的目标镜像）解析出来的实际 image；service 不存在或 config 失败时为空。例："renice-probe.invalid/server_image:check"
+	Image string `protobuf:"bytes,4,opt,name=image,proto3" json:"image,omitempty"`
+	// ok=false 时的中文原因，说清是没读到变量还是 compose 里没有这个 service。例："server 的 image 没有读 SERVER_IMAGE（解析出来是 renice-oj-test-server:dev）：要写成 ${SERVER_IMAGE:-…}，见 renice-template AGENTS「compose 规范」"
+	Message       string `protobuf:"bytes,5,opt,name=message,proto3" json:"message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ComposeImageCheck) Reset() {
+	*x = ComposeImageCheck{}
+	mi := &file_renice_infra_v1_deploy_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ComposeImageCheck) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ComposeImageCheck) ProtoMessage() {}
+
+func (x *ComposeImageCheck) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_infra_v1_deploy_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ComposeImageCheck.ProtoReflect.Descriptor instead.
+func (*ComposeImageCheck) Descriptor() ([]byte, []int) {
+	return file_renice_infra_v1_deploy_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ComposeImageCheck) GetEnvVar() string {
+	if x != nil {
+		return x.EnvVar
+	}
+	return ""
+}
+
+func (x *ComposeImageCheck) GetComposeService() string {
+	if x != nil {
+		return x.ComposeService
+	}
+	return ""
+}
+
+func (x *ComposeImageCheck) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+func (x *ComposeImageCheck) GetImage() string {
+	if x != nil {
+		return x.Image
+	}
+	return ""
+}
+
+func (x *ComposeImageCheck) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+// ComposeFileWritten 是写入命令的结果：新内容的摘要、备份路径和保存后的镜像变量检查。
+type ComposeFileWritten struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 新内容的 sha256，十六进制小写。例："9f2c1e…"
+	Sha256 string `protobuf:"bytes,1,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	// 原文件的备份路径；原文件不存在时为空。例："/var/lib/renice-agent/file-backups/opt_renice-oj/docker-compose.yml.20261101T082000Z"
+	BackupPath string `protobuf:"bytes,2,opt,name=backup_path,json=backupPath,proto3" json:"backup_path,omitempty"`
+	// 对新文件跑出来的镜像变量检查结果。检查不通过不阻止保存，只提示页面。例：[{env_var: "SERVER_IMAGE", compose_service: "server", ok: false, image: "renice-oj-test-server:dev", message: "server 的 image 没有读 SERVER_IMAGE（解析出来是 renice-oj-test-server:dev）"}]
+	ImageChecks   []*ComposeImageCheck `protobuf:"bytes,3,rep,name=image_checks,json=imageChecks,proto3" json:"image_checks,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ComposeFileWritten) Reset() {
+	*x = ComposeFileWritten{}
+	mi := &file_renice_infra_v1_deploy_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ComposeFileWritten) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ComposeFileWritten) ProtoMessage() {}
+
+func (x *ComposeFileWritten) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_infra_v1_deploy_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ComposeFileWritten.ProtoReflect.Descriptor instead.
+func (*ComposeFileWritten) Descriptor() ([]byte, []int) {
+	return file_renice_infra_v1_deploy_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *ComposeFileWritten) GetSha256() string {
+	if x != nil {
+		return x.Sha256
+	}
+	return ""
+}
+
+func (x *ComposeFileWritten) GetBackupPath() string {
+	if x != nil {
+		return x.BackupPath
+	}
+	return ""
+}
+
+func (x *ComposeFileWritten) GetImageChecks() []*ComposeImageCheck {
+	if x != nil {
+		return x.ImageChecks
+	}
+	return nil
+}
+
 var File_renice_infra_v1_deploy_proto protoreflect.FileDescriptor
 
 const file_renice_infra_v1_deploy_proto_rawDesc = "" +
 	"\n" +
-	"\x1crenice/infra/v1/deploy.proto\x12\x0frenice.infra.v1\x1a\x1crenice/infra/v1/common.proto\"\xf4\x02\n" +
+	"\x1crenice/infra/v1/deploy.proto\x12\x0frenice.infra.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1crenice/infra/v1/common.proto\"\xf4\x02\n" +
 	"\x06Deploy\x12\x18\n" +
 	"\aservice\x18\x01 \x01(\tR\aservice\x12\x10\n" +
 	"\x03env\x18\x02 \x01(\tR\x03env\x12\x18\n" +
@@ -244,7 +953,65 @@ const file_renice_infra_v1_deploy_proto_rawDesc = "" +
 	"\bImageRef\x12'\n" +
 	"\x0fcompose_service\x18\x01 \x01(\tR\x0ecomposeService\x12\x17\n" +
 	"\aenv_var\x18\x02 \x01(\tR\x06envVar\x12\x14\n" +
-	"\x05image\x18\x03 \x01(\tR\x05imageB\xc4\x01\n" +
+	"\x05image\x18\x03 \x01(\tR\x05image\"V\n" +
+	"\x12ComposeImageExpect\x12\x17\n" +
+	"\aenv_var\x18\x01 \x01(\tR\x06envVar\x12'\n" +
+	"\x0fcompose_service\x18\x02 \x01(\tR\x0ecomposeService\"\xae\x01\n" +
+	"\x10ComposeFilesRead\x12\x1f\n" +
+	"\vcompose_dir\x18\x01 \x01(\tR\n" +
+	"composeDir\x12!\n" +
+	"\fcompose_file\x18\x02 \x01(\tR\vcomposeFile\x12\x19\n" +
+	"\benv_file\x18\x03 \x01(\tR\aenvFile\x12;\n" +
+	"\x06images\x18\x04 \x03(\v2#.renice.infra.v1.ComposeImageExpectR\x06images\"\x9f\x02\n" +
+	"\x10ComposeFileWrite\x12\x1f\n" +
+	"\vcompose_dir\x18\x01 \x01(\tR\n" +
+	"composeDir\x12!\n" +
+	"\fcompose_file\x18\x02 \x01(\tR\vcomposeFile\x12\x19\n" +
+	"\benv_file\x18\x03 \x01(\tR\aenvFile\x124\n" +
+	"\x04kind\x18\x04 \x01(\x0e2 .renice.infra.v1.ComposeFileKindR\x04kind\x12\x18\n" +
+	"\acontent\x18\x05 \x01(\tR\acontent\x12\x1f\n" +
+	"\vbase_sha256\x18\x06 \x01(\tR\n" +
+	"baseSha256\x12;\n" +
+	"\x06images\x18\a \x03(\v2#.renice.infra.v1.ComposeImageExpectR\x06images\"\x9d\x02\n" +
+	"\fComposeFiles\x12=\n" +
+	"\acompose\x18\x01 \x01(\v2#.renice.infra.v1.ComposeFileContentR\acompose\x125\n" +
+	"\x03env\x18\x02 \x01(\v2#.renice.infra.v1.ComposeFileContentR\x03env\x12-\n" +
+	"\x03git\x18\x03 \x01(\v2\x1b.renice.infra.v1.ComposeGitR\x03git\x12E\n" +
+	"\fimage_checks\x18\x04 \x03(\v2\".renice.infra.v1.ComposeImageCheckR\vimageChecks\x12!\n" +
+	"\fconfig_error\x18\x05 \x01(\tR\vconfigError\"\xd7\x01\n" +
+	"\x12ComposeFileContent\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12\x16\n" +
+	"\x06exists\x18\x02 \x01(\bR\x06exists\x12\x18\n" +
+	"\acontent\x18\x03 \x01(\tR\acontent\x12\x16\n" +
+	"\x06sha256\x18\x04 \x01(\tR\x06sha256\x12\x12\n" +
+	"\x04size\x18\x05 \x01(\x03R\x04size\x12;\n" +
+	"\vmodified_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"modifiedAt\x12\x12\n" +
+	"\x04mode\x18\a \x01(\rR\x04mode\"\xbf\x01\n" +
+	"\n" +
+	"ComposeGit\x12\x1c\n" +
+	"\tavailable\x18\x01 \x01(\bR\tavailable\x12\x16\n" +
+	"\x06branch\x18\x02 \x01(\tR\x06branch\x12\x12\n" +
+	"\x04head\x18\x03 \x01(\tR\x04head\x12#\n" +
+	"\rcompose_dirty\x18\x04 \x01(\bR\fcomposeDirty\x12!\n" +
+	"\fcompose_diff\x18\x05 \x01(\tR\vcomposeDiff\x12\x1f\n" +
+	"\venv_tracked\x18\x06 \x01(\bR\n" +
+	"envTracked\"\x95\x01\n" +
+	"\x11ComposeImageCheck\x12\x17\n" +
+	"\aenv_var\x18\x01 \x01(\tR\x06envVar\x12'\n" +
+	"\x0fcompose_service\x18\x02 \x01(\tR\x0ecomposeService\x12\x0e\n" +
+	"\x02ok\x18\x03 \x01(\bR\x02ok\x12\x14\n" +
+	"\x05image\x18\x04 \x01(\tR\x05image\x12\x18\n" +
+	"\amessage\x18\x05 \x01(\tR\amessage\"\x94\x01\n" +
+	"\x12ComposeFileWritten\x12\x16\n" +
+	"\x06sha256\x18\x01 \x01(\tR\x06sha256\x12\x1f\n" +
+	"\vbackup_path\x18\x02 \x01(\tR\n" +
+	"backupPath\x12E\n" +
+	"\fimage_checks\x18\x03 \x03(\v2\".renice.infra.v1.ComposeImageCheckR\vimageChecks*n\n" +
+	"\x0fComposeFileKind\x12!\n" +
+	"\x1dCOMPOSE_FILE_KIND_UNSPECIFIED\x10\x00\x12\x1d\n" +
+	"\x19COMPOSE_FILE_KIND_COMPOSE\x10\x01\x12\x19\n" +
+	"\x15COMPOSE_FILE_KIND_ENV\x10\x02B\xc4\x01\n" +
 	"\x13com.renice.infra.v1B\vDeployProtoP\x01ZBgithub.com/renice-project/renice-pb/gen/go/renice/infra/v1;infrav1\xa2\x02\x03RIX\xaa\x02\x0fRenice.Infra.V1\xca\x02\x0fRenice\\Infra\\V1\xe2\x02\x1bRenice\\Infra\\V1\\GPBMetadata\xea\x02\x11Renice::Infra::V1b\x06proto3"
 
 var (
@@ -259,20 +1026,40 @@ func file_renice_infra_v1_deploy_proto_rawDescGZIP() []byte {
 	return file_renice_infra_v1_deploy_proto_rawDescData
 }
 
-var file_renice_infra_v1_deploy_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_renice_infra_v1_deploy_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_renice_infra_v1_deploy_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_renice_infra_v1_deploy_proto_goTypes = []any{
-	(*Deploy)(nil),       // 0: renice.infra.v1.Deploy
-	(*ImageRef)(nil),     // 1: renice.infra.v1.ImageRef
-	(*RegistryAuth)(nil), // 2: renice.infra.v1.RegistryAuth
+	(ComposeFileKind)(0),          // 0: renice.infra.v1.ComposeFileKind
+	(*Deploy)(nil),                // 1: renice.infra.v1.Deploy
+	(*ImageRef)(nil),              // 2: renice.infra.v1.ImageRef
+	(*ComposeImageExpect)(nil),    // 3: renice.infra.v1.ComposeImageExpect
+	(*ComposeFilesRead)(nil),      // 4: renice.infra.v1.ComposeFilesRead
+	(*ComposeFileWrite)(nil),      // 5: renice.infra.v1.ComposeFileWrite
+	(*ComposeFiles)(nil),          // 6: renice.infra.v1.ComposeFiles
+	(*ComposeFileContent)(nil),    // 7: renice.infra.v1.ComposeFileContent
+	(*ComposeGit)(nil),            // 8: renice.infra.v1.ComposeGit
+	(*ComposeImageCheck)(nil),     // 9: renice.infra.v1.ComposeImageCheck
+	(*ComposeFileWritten)(nil),    // 10: renice.infra.v1.ComposeFileWritten
+	(*RegistryAuth)(nil),          // 11: renice.infra.v1.RegistryAuth
+	(*timestamppb.Timestamp)(nil), // 12: google.protobuf.Timestamp
 }
 var file_renice_infra_v1_deploy_proto_depIdxs = []int32{
-	1, // 0: renice.infra.v1.Deploy.images:type_name -> renice.infra.v1.ImageRef
-	2, // 1: renice.infra.v1.Deploy.registry:type_name -> renice.infra.v1.RegistryAuth
-	2, // [2:2] is the sub-list for method output_type
-	2, // [2:2] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	2,  // 0: renice.infra.v1.Deploy.images:type_name -> renice.infra.v1.ImageRef
+	11, // 1: renice.infra.v1.Deploy.registry:type_name -> renice.infra.v1.RegistryAuth
+	3,  // 2: renice.infra.v1.ComposeFilesRead.images:type_name -> renice.infra.v1.ComposeImageExpect
+	0,  // 3: renice.infra.v1.ComposeFileWrite.kind:type_name -> renice.infra.v1.ComposeFileKind
+	3,  // 4: renice.infra.v1.ComposeFileWrite.images:type_name -> renice.infra.v1.ComposeImageExpect
+	7,  // 5: renice.infra.v1.ComposeFiles.compose:type_name -> renice.infra.v1.ComposeFileContent
+	7,  // 6: renice.infra.v1.ComposeFiles.env:type_name -> renice.infra.v1.ComposeFileContent
+	8,  // 7: renice.infra.v1.ComposeFiles.git:type_name -> renice.infra.v1.ComposeGit
+	9,  // 8: renice.infra.v1.ComposeFiles.image_checks:type_name -> renice.infra.v1.ComposeImageCheck
+	12, // 9: renice.infra.v1.ComposeFileContent.modified_at:type_name -> google.protobuf.Timestamp
+	9,  // 10: renice.infra.v1.ComposeFileWritten.image_checks:type_name -> renice.infra.v1.ComposeImageCheck
+	11, // [11:11] is the sub-list for method output_type
+	11, // [11:11] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_renice_infra_v1_deploy_proto_init() }
@@ -286,13 +1073,14 @@ func file_renice_infra_v1_deploy_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_renice_infra_v1_deploy_proto_rawDesc), len(file_renice_infra_v1_deploy_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   2,
+			NumEnums:      1,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_renice_infra_v1_deploy_proto_goTypes,
 		DependencyIndexes: file_renice_infra_v1_deploy_proto_depIdxs,
+		EnumInfos:         file_renice_infra_v1_deploy_proto_enumTypes,
 		MessageInfos:      file_renice_infra_v1_deploy_proto_msgTypes,
 	}.Build()
 	File_renice_infra_v1_deploy_proto = out.File

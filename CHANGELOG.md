@@ -4,6 +4,8 @@
 
 ## 未发布
 
+- 新增发布单元 compose / env 文件的读取与在线改写命令（`ComposeFilesRead`、`ComposeFileWrite`）及结果（`ComposeFiles`、`ComposeFileWritten`），带文件摘要、git 状态与镜像变量检查；命令号段新增 60–69。背景：renice-infra 要在管理端直接改服务环境的 compose 与 .env。
+
 - 新增 agent 命令通道信封及探测、日志、发布、构建、解析契约，明确角色、超时、取消、断线、凭据与探测指标白名单；PSI 增加 CPU full 可用性标记。
 
 - Hello 登记增加预期会话代次比较并交换，延迟或并发的首次登记不能覆盖已成功登记的新会话；代次状态丢失时要求人工恢复。

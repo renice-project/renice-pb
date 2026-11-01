@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package renice.infra.v1;
 
+import "google/protobuf/timestamp.proto";
 import "renice/infra/v1/common.proto";
 
 // Deploy 是服务端下发的发布命令，不需要额外角色；默认总超时 300 秒。
@@ -47,4 +48,132 @@ message ImageRef {
   string env_var = 2;
   // 完整镜像地址和 tag。例："registry.renice.cc/renice-sso-server:v0.1.0-alpha.4"
   string image = 3;
+}
+
+// ComposeFileKind 是要编辑的文件种类，决定写文件时的权限位和校验方式。
+enum ComposeFileKind {
+  // 未指定，服务端不会下发。
+  COMPOSE_FILE_KIND_UNSPECIFIED = 0;
+  // compose 文件，新建时权限 0644。例："deploy/docker-compose.yml"
+  COMPOSE_FILE_KIND_COMPOSE = 1;
+  // 环境的运行配置 env 文件，新建时权限 0600。例："deploy/.env"
+  COMPOSE_FILE_KIND_ENV = 2;
+}
+
+// ComposeImageExpect 是一个镜像变量和它应该被哪个 compose service 引用。
+// 一个镜像被多个 compose service 共用时，每个 service 一条。
+message ComposeImageExpect {
+  // compose 文件里的镜像变量名，必须写成 ${变量}。例："SERVER_IMAGE"
+  string env_var = 1;
+  // compose 文件中的服务名。例："server"
+  string compose_service = 2;
+}
+
+// ComposeFilesRead 是读取某个服务环境的 compose 文件和 env 文件，不需要额外角色；默认总超时 30 秒。
+// 除了文件内容，还回传摘要、修改时间、所在目录的 git 状态，并对当前文件跑一次镜像变量检查。
+// 读的时候也拿 compose 目录的发布锁：有发布在跑时拒绝为 REJECTED「该 compose 目录有发布在跑，稍后再试」。
+// 命令输出和日志里不会出现文件内容，只记命令 id、种类、路径和摘要。
+message ComposeFilesRead {
+  // compose 项目所在目录，必须是绝对路径，两个文件都必须在这个目录里。例："/opt/renice-oj"
+  string compose_dir = 1;
+  // 相对 compose_dir 的 compose 文件路径。例："deploy/docker-compose.yml"
+  string compose_file = 2;
+  // 相对 compose_dir 的 env 文件路径；空表示这个环境没有 env 文件。例："deploy/.env"
+  string env_file = 3;
+  // 这个服务环境登记的镜像变量和 compose service，用来逐条检查 image 是否真的读了变量。
+  // 例：[{env_var: "SERVER_IMAGE", compose_service: "server"}, {env_var: "SERVER_IMAGE", compose_service: "worker"}]
+  repeated ComposeImageExpect images = 4;
+}
+
+// ComposeFileWrite 是在线改写某个服务环境的 compose 文件或 env 文件，不需要额外角色；默认总超时 30 秒。
+// 先比对 base_sha256，不一致返回 REJECTED「conflict: …」；再写临时文件、用 docker compose config 校验、
+// 备份原文件、原子替换，最后对新文件跑一次镜像变量检查。不执行 up，也不重启任何容器。
+message ComposeFileWrite {
+  // compose 项目所在目录，必须是绝对路径，两个文件都必须在这个目录里。例："/opt/renice-oj"
+  string compose_dir = 1;
+  // 相对 compose_dir 的 compose 文件路径。例："deploy/docker-compose.yml"
+  string compose_file = 2;
+  // 相对 compose_dir 的 env 文件路径；空表示这个环境没有 env 文件，此时写 env 直接 REJECTED。例："deploy/.env"
+  string env_file = 3;
+  // 这次写的是哪一个文件。例：COMPOSE_FILE_KIND_COMPOSE
+  ComposeFileKind kind = 4;
+  // 完整的新内容，最多 256 KiB，必须是合法 UTF-8 且不含 NUL。例："services:\n  server:\n    image: ${SERVER_IMAGE:-…}\n"
+  string content = 5;
+  // 打开编辑器时读到的 base64 前的 sha256（十六进制小写）；文件原本不存在时传空串。例："9f2c…"
+  string base_sha256 = 6;
+  // 这个服务环境登记的镜像变量和 compose service，保存后用来跑镜像变量检查。例：[{env_var: "SERVER_IMAGE", compose_service: "server"}]
+  repeated ComposeImageExpect images = 7;
+}
+
+// ComposeFiles 是读取命令的结果：两个文件、所在目录的 git 状态和镜像变量检查。
+message ComposeFiles {
+  // compose 文件的当前内容。例：{path: "deploy/docker-compose.yml", exists: true, sha256: "9f2c…", size: 812}
+  ComposeFileContent compose = 1;
+  // env 文件的当前内容；env_file 为空时 exists=false。例：{path: "deploy/.env", exists: true, sha256: "41ab…", size: 256, mode: 384}
+  ComposeFileContent env = 2;
+  // compose 目录的 git 信息；目录不是 git 仓库或机器上没有 git 时 available=false。
+  ComposeGit git = 3;
+  // 逐条镜像变量检查结果。例：[{env_var: "SERVER_IMAGE", compose_service: "server", ok: true, image: "renice-probe.invalid/server_image:check"}]
+  repeated ComposeImageCheck image_checks = 4;
+  // docker compose config 对当前文件报的错，正常时为空；有错也照常返回文件内容，不算命令失败。例："services.server.image must be a string"
+  string config_error = 5;
+}
+
+// ComposeFileContent 是一个文件的当前状态。不存在时 exists=false，content 和 sha256 为空。
+message ComposeFileContent {
+  // 相对 compose_dir 的路径。例："deploy/docker-compose.yml"
+  string path = 1;
+  // 文件是否存在。例：true
+  bool exists = 2;
+  // 完整内容（UTF-8）；不存在时为空。例："services:\n  server:\n    image: ${SERVER_IMAGE:-…}\n"
+  string content = 3;
+  // 内容的 sha256，十六进制小写；空文件也有值，不存在时为空。例："9f2c1e…"
+  string sha256 = 4;
+  // 文件大小，字节。例：812
+  int64 size = 5;
+  // 最后修改时间；不存在时不带。例：2026-11-01T16:20:00+08:00
+  google.protobuf.Timestamp modified_at = 6;
+  // 权限位（不含文件类型），例如 0644 是 420；不存在时为 0。例：420
+  uint32 mode = 7;
+}
+
+// ComposeGit 是 compose 目录的 git 状态，用来提醒把平台上的改动补回仓库。
+// 不是 git 仓库或机器上没有 git 时 available=false，其余字段为空，不算错误。
+message ComposeGit {
+  // 是否取得了 git 信息。例：true
+  bool available = 1;
+  // 当前分支名。例："dev"
+  string branch = 2;
+  // 当前提交的短 hash。例："209be9d"
+  string head = 3;
+  // compose 文件相对 HEAD 是否有未提交改动（git status --porcelain 非空）。例：true
+  bool compose_dirty = 4;
+  // compose 文件相对 HEAD 的 unified diff，最多 64 KiB，超出截断并在末尾写「…（diff 过长已截断）」。例："--- a/deploy/docker-compose.yml\n+++ b/deploy/docker-compose.yml\n"
+  string compose_diff = 5;
+  // env 文件是否被 git 跟踪（git ls-files --error-unmatch 成功）。例：false
+  bool env_tracked = 6;
+}
+
+// ComposeImageCheck 是一条镜像变量检查结果：用探针值渲染 compose 后，看这个 compose service 的 image 有没有读到变量。
+message ComposeImageCheck {
+  // 被检查的镜像变量名。例："SERVER_IMAGE"
+  string env_var = 1;
+  // 被点名的 compose service。例："server"
+  string compose_service = 2;
+  // 这个 service 的 image 是否等于用变量渲染出来的值。例：true
+  bool ok = 3;
+  // 用探针值（或发布时的目标镜像）解析出来的实际 image；service 不存在或 config 失败时为空。例："renice-probe.invalid/server_image:check"
+  string image = 4;
+  // ok=false 时的中文原因，说清是没读到变量还是 compose 里没有这个 service。例："server 的 image 没有读 SERVER_IMAGE（解析出来是 renice-oj-test-server:dev）：要写成 ${SERVER_IMAGE:-…}，见 renice-template AGENTS「compose 规范」"
+  string message = 5;
+}
+
+// ComposeFileWritten 是写入命令的结果：新内容的摘要、备份路径和保存后的镜像变量检查。
+message ComposeFileWritten {
+  // 新内容的 sha256，十六进制小写。例："9f2c1e…"
+  string sha256 = 1;
+  // 原文件的备份路径；原文件不存在时为空。例："/var/lib/renice-agent/file-backups/opt_renice-oj/docker-compose.yml.20261101T082000Z"
+  string backup_path = 2;
+  // 对新文件跑出来的镜像变量检查结果。检查不通过不阻止保存，只提示页面。例：[{env_var: "SERVER_IMAGE", compose_service: "server", ok: false, image: "renice-oj-test-server:dev", message: "server 的 image 没有读 SERVER_IMAGE（解析出来是 renice-oj-test-server:dev）"}]
+  repeated ComposeImageCheck image_checks = 3;
 }

@@ -413,7 +413,7 @@ message Command {
   string id = 1;
   // agent 端总超时，单位秒，0 使用类型默认值：日志 follow 不限时、发布 300、构建 1800、解析 30。例：300
   int32 timeout_seconds = 2;
-  // 命令内容按功能分号段：20–29 日志、30–39 发布、40–49 构建、50–59 解析。
+  // 命令内容按功能分号段：20–29 日志、30–39 发布、40–49 构建、50–59 解析、60–69 服务文件。
   // 后续功能在各自号段内加字段，不用 reserved 占号段。
   oneof kind {
     // 读取或跟随容器日志。例：{container: "renice-sso-server", tail_lines: 200, follow: true}
@@ -430,6 +430,10 @@ message Command {
     DnsSetA dns_set_a = 52;
     // 删除一条 A 记录。例：{domain: "renice.cc", record_id: "123456789012345678"}
     DnsDelete dns_delete = 53;
+    // 读取某个服务环境的 compose 与 env 文件。例：{compose_dir: "/opt/renice-oj", compose_file: "deploy/docker-compose.yml", env_file: "deploy/.env"}
+    ComposeFilesRead compose_files_read = 60;
+    // 在线改写某个服务环境的 compose 或 env 文件。例：{compose_dir: "/opt/renice-oj", compose_file: "deploy/docker-compose.yml", kind: COMPOSE_FILE_KIND_COMPOSE, content: "services:…", base_sha256: "9f2c…"}
+    ComposeFileWrite compose_file_write = 61;
   }
 }
 
@@ -444,7 +448,7 @@ message CommandResult {
   string error = 3;
   // 命令结束的时间。例：2026-10-31T16:25:00+08:00
   google.protobuf.Timestamp finished_at = 4;
-  // 结果按与 Command.kind 相同的功能号段分配：20–29 日志（无 detail）、30–39 发布、40–49 构建、50–59 解析。
+  // 结果按与 Command.kind 相同的功能号段分配：20–29 日志（无 detail）、30–39 发布、40–49 构建、50–59 解析、60–69 服务文件。
   oneof detail {
     // 发布结果，包含回滚情况；失败时也可带实际观测结果。例：{previous_version: "v0.1.0-alpha.3", rolled_back: false}
     DeployResult deploy = 30;
@@ -454,6 +458,10 @@ message CommandResult {
     DnsRecords dns_records = 50;
     // 新增、修改或删除的结果。例：{record_id: "123456789012345678"}
     DnsChange dns_change = 51;
+    // 读取 compose / env 文件的结果，对应 ComposeFilesRead。例：{compose: {path: "deploy/docker-compose.yml", exists: true, sha256: "9f2c…"}}
+    ComposeFiles compose_files = 60;
+    // 写入结果，对应 ComposeFileWrite。例：{sha256: "9f2c…", backup_path: "/var/lib/renice-agent/file-backups/opt_renice-oj/docker-compose.yml.20261101T082000Z"}
+    ComposeFileWritten compose_file_written = 61;
   }
 }
 
