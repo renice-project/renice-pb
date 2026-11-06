@@ -98,8 +98,10 @@ func (x *ExchangeCodeRequest) GetRedirectUri() string {
 // ExchangeCodeResponse 是 ExchangeCode 的出参。
 type ExchangeCodeResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// 这次登录的用户。
-	User          *User `protobuf:"bytes,1,opt,name=user,proto3" json:"user,omitempty"`
+	// 这次登录的用户。例：{id: 10001, username: "ice", display_name: "冰", email: "ice@renice.cc"}
+	User *User `protobuf:"bytes,1,opt,name=user,proto3" json:"user,omitempty"`
+	// 该用户的跨服务统一偏好设置（已合并服务端注册表默认值），登录换码时顺路带回，省掉一次额外 RPC。例：{"theme_mode": "dark", "dark_ink": "crisp"}
+	Preferences   map[string]string `protobuf:"bytes,2,rep,name=preferences,proto3" json:"preferences,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -137,6 +139,13 @@ func (*ExchangeCodeResponse) Descriptor() ([]byte, []int) {
 func (x *ExchangeCodeResponse) GetUser() *User {
 	if x != nil {
 		return x.User
+	}
+	return nil
+}
+
+func (x *ExchangeCodeResponse) GetPreferences() map[string]string {
+	if x != nil {
+		return x.Preferences
 	}
 	return nil
 }
@@ -644,6 +653,253 @@ func (x *Grant) GetGrantedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+// GetUserPreferencesRequest 是 GetUserPreferences 的入参。
+type GetUserPreferencesRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 调用方在 SSO 登记的客户端 ID。例："renice-infra"
+	ClientId string `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	// 客户端密钥，只放在服务器的 .env 里。例："（见服务器 .env 的 APP_SSO_CLIENT_SECRET）"
+	ClientSecret string `protobuf:"bytes,2,opt,name=client_secret,json=clientSecret,proto3" json:"client_secret,omitempty"`
+	// 要读取偏好的用户在 SSO 里的 ID。例：10001
+	UserId        int64 `protobuf:"varint,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetUserPreferencesRequest) Reset() {
+	*x = GetUserPreferencesRequest{}
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetUserPreferencesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetUserPreferencesRequest) ProtoMessage() {}
+
+func (x *GetUserPreferencesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetUserPreferencesRequest.ProtoReflect.Descriptor instead.
+func (*GetUserPreferencesRequest) Descriptor() ([]byte, []int) {
+	return file_renice_sso_v1_sso_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *GetUserPreferencesRequest) GetClientId() string {
+	if x != nil {
+		return x.ClientId
+	}
+	return ""
+}
+
+func (x *GetUserPreferencesRequest) GetClientSecret() string {
+	if x != nil {
+		return x.ClientSecret
+	}
+	return ""
+}
+
+func (x *GetUserPreferencesRequest) GetUserId() int64 {
+	if x != nil {
+		return x.UserId
+	}
+	return 0
+}
+
+// GetUserPreferencesResponse 是 GetUserPreferences 的出参。
+type GetUserPreferencesResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 合并服务端默认值后的完整偏好设置键值表。例：{"theme_mode": "dark", "dark_ink": "crisp"}
+	Preferences map[string]string `protobuf:"bytes,1,rep,name=preferences,proto3" json:"preferences,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// 该用户最近一次修改任一偏好项的时间；若用户从未修改过任何偏好则为空（不填）。例：2026-11-06T11:30:00+08:00
+	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetUserPreferencesResponse) Reset() {
+	*x = GetUserPreferencesResponse{}
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetUserPreferencesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetUserPreferencesResponse) ProtoMessage() {}
+
+func (x *GetUserPreferencesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetUserPreferencesResponse.ProtoReflect.Descriptor instead.
+func (*GetUserPreferencesResponse) Descriptor() ([]byte, []int) {
+	return file_renice_sso_v1_sso_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *GetUserPreferencesResponse) GetPreferences() map[string]string {
+	if x != nil {
+		return x.Preferences
+	}
+	return nil
+}
+
+func (x *GetUserPreferencesResponse) GetUpdatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return nil
+}
+
+// UpdateUserPreferencesRequest 是 UpdateUserPreferences 的入参。
+type UpdateUserPreferencesRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 调用方在 SSO 登记的客户端 ID。例："renice-oj"
+	ClientId string `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	// 客户端密钥，只放在服务器的 .env 里。例："（见服务器 .env 的 APP_SSO_CLIENT_SECRET）"
+	ClientSecret string `protobuf:"bytes,2,opt,name=client_secret,json=clientSecret,proto3" json:"client_secret,omitempty"`
+	// 要更新偏好的用户在 SSO 里的 ID。例：10001
+	UserId int64 `protobuf:"varint,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	// 本次要局部更新的偏好键值对（不能为空，且每个键和值都必须通过 SSO 受控注册表校验；未出现的键保持原值不变）。例：{"theme_mode": "dark"}
+	Preferences   map[string]string `protobuf:"bytes,4,rep,name=preferences,proto3" json:"preferences,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdateUserPreferencesRequest) Reset() {
+	*x = UpdateUserPreferencesRequest{}
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateUserPreferencesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateUserPreferencesRequest) ProtoMessage() {}
+
+func (x *UpdateUserPreferencesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateUserPreferencesRequest.ProtoReflect.Descriptor instead.
+func (*UpdateUserPreferencesRequest) Descriptor() ([]byte, []int) {
+	return file_renice_sso_v1_sso_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *UpdateUserPreferencesRequest) GetClientId() string {
+	if x != nil {
+		return x.ClientId
+	}
+	return ""
+}
+
+func (x *UpdateUserPreferencesRequest) GetClientSecret() string {
+	if x != nil {
+		return x.ClientSecret
+	}
+	return ""
+}
+
+func (x *UpdateUserPreferencesRequest) GetUserId() int64 {
+	if x != nil {
+		return x.UserId
+	}
+	return 0
+}
+
+func (x *UpdateUserPreferencesRequest) GetPreferences() map[string]string {
+	if x != nil {
+		return x.Preferences
+	}
+	return nil
+}
+
+// UpdateUserPreferencesResponse 是 UpdateUserPreferences 的出参。
+type UpdateUserPreferencesResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 更新完成后、合并服务端默认值的完整偏好设置键值表。例：{"theme_mode": "dark", "dark_ink": "crisp"}
+	Preferences map[string]string `protobuf:"bytes,1,rep,name=preferences,proto3" json:"preferences,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// 本次更新后该用户偏好记录的最新修改时间。例：2026-11-06T11:30:00+08:00
+	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdateUserPreferencesResponse) Reset() {
+	*x = UpdateUserPreferencesResponse{}
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateUserPreferencesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateUserPreferencesResponse) ProtoMessage() {}
+
+func (x *UpdateUserPreferencesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateUserPreferencesResponse.ProtoReflect.Descriptor instead.
+func (*UpdateUserPreferencesResponse) Descriptor() ([]byte, []int) {
+	return file_renice_sso_v1_sso_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *UpdateUserPreferencesResponse) GetPreferences() map[string]string {
+	if x != nil {
+		return x.Preferences
+	}
+	return nil
+}
+
+func (x *UpdateUserPreferencesResponse) GetUpdatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return nil
+}
+
 var File_renice_sso_v1_sso_proto protoreflect.FileDescriptor
 
 const file_renice_sso_v1_sso_proto_rawDesc = "" +
@@ -653,9 +909,13 @@ const file_renice_sso_v1_sso_proto_rawDesc = "" +
 	"\x04code\x18\x01 \x01(\tR\x04code\x12\x1b\n" +
 	"\tclient_id\x18\x02 \x01(\tR\bclientId\x12#\n" +
 	"\rclient_secret\x18\x03 \x01(\tR\fclientSecret\x12!\n" +
-	"\fredirect_uri\x18\x04 \x01(\tR\vredirectUri\"?\n" +
+	"\fredirect_uri\x18\x04 \x01(\tR\vredirectUri\"\xd7\x01\n" +
 	"\x14ExchangeCodeResponse\x12'\n" +
-	"\x04user\x18\x01 \x01(\v2\x13.renice.sso.v1.UserR\x04user\"\xc5\x01\n" +
+	"\x04user\x18\x01 \x01(\v2\x13.renice.sso.v1.UserR\x04user\x12V\n" +
+	"\vpreferences\x18\x02 \x03(\v24.renice.sso.v1.ExchangeCodeResponse.PreferencesEntryR\vpreferences\x1a>\n" +
+	"\x10PreferencesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xc5\x01\n" +
 	"\x04User\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x1a\n" +
 	"\busername\x18\x02 \x01(\tR\busername\x12!\n" +
@@ -691,14 +951,42 @@ const file_renice_sso_v1_sso_proto_rawDesc = "" +
 	"\x05Grant\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\x03R\x06userId\x129\n" +
 	"\n" +
-	"granted_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\tgrantedAt2\xd5\x02\n" +
+	"granted_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\tgrantedAt\"v\n" +
+	"\x19GetUserPreferencesRequest\x12\x1b\n" +
+	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12#\n" +
+	"\rclient_secret\x18\x02 \x01(\tR\fclientSecret\x12\x17\n" +
+	"\auser_id\x18\x03 \x01(\x03R\x06userId\"\xf5\x01\n" +
+	"\x1aGetUserPreferencesResponse\x12\\\n" +
+	"\vpreferences\x18\x01 \x03(\v2:.renice.sso.v1.GetUserPreferencesResponse.PreferencesEntryR\vpreferences\x129\n" +
+	"\n" +
+	"updated_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x1a>\n" +
+	"\x10PreferencesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x99\x02\n" +
+	"\x1cUpdateUserPreferencesRequest\x12\x1b\n" +
+	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12#\n" +
+	"\rclient_secret\x18\x02 \x01(\tR\fclientSecret\x12\x17\n" +
+	"\auser_id\x18\x03 \x01(\x03R\x06userId\x12^\n" +
+	"\vpreferences\x18\x04 \x03(\v2<.renice.sso.v1.UpdateUserPreferencesRequest.PreferencesEntryR\vpreferences\x1a>\n" +
+	"\x10PreferencesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xfb\x01\n" +
+	"\x1dUpdateUserPreferencesResponse\x12_\n" +
+	"\vpreferences\x18\x01 \x03(\v2=.renice.sso.v1.UpdateUserPreferencesResponse.PreferencesEntryR\vpreferences\x129\n" +
+	"\n" +
+	"updated_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x1a>\n" +
+	"\x10PreferencesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x012\xb4\x04\n" +
 	"\n" +
 	"SSOService\x12W\n" +
 	"\fExchangeCode\x12\".renice.sso.v1.ExchangeCodeRequest\x1a#.renice.sso.v1.ExchangeCodeResponse\x12K\n" +
 	"\bGrantApp\x12\x1e.renice.sso.v1.GrantAppRequest\x1a\x1f.renice.sso.v1.GrantAppResponse\x12N\n" +
 	"\tRevokeApp\x12\x1f.renice.sso.v1.RevokeAppRequest\x1a .renice.sso.v1.RevokeAppResponse\x12Q\n" +
 	"\n" +
-	"ListGrants\x12 .renice.sso.v1.ListGrantsRequest\x1a!.renice.sso.v1.ListGrantsResponseB\xb3\x01\n" +
+	"ListGrants\x12 .renice.sso.v1.ListGrantsRequest\x1a!.renice.sso.v1.ListGrantsResponse\x12i\n" +
+	"\x12GetUserPreferences\x12(.renice.sso.v1.GetUserPreferencesRequest\x1a).renice.sso.v1.GetUserPreferencesResponse\x12r\n" +
+	"\x15UpdateUserPreferences\x12+.renice.sso.v1.UpdateUserPreferencesRequest\x1a,.renice.sso.v1.UpdateUserPreferencesResponseB\xb3\x01\n" +
 	"\x11com.renice.sso.v1B\bSsoProtoP\x01Z>github.com/renice-project/renice-pb/gen/go/renice/sso/v1;ssov1\xa2\x02\x03RSX\xaa\x02\rRenice.Sso.V1\xca\x02\rRenice\\Sso\\V1\xe2\x02\x19Renice\\Sso\\V1\\GPBMetadata\xea\x02\x0fRenice::Sso::V1b\x06proto3"
 
 var (
@@ -713,39 +1001,57 @@ func file_renice_sso_v1_sso_proto_rawDescGZIP() []byte {
 	return file_renice_sso_v1_sso_proto_rawDescData
 }
 
-var file_renice_sso_v1_sso_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_renice_sso_v1_sso_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_renice_sso_v1_sso_proto_goTypes = []any{
-	(*ExchangeCodeRequest)(nil),   // 0: renice.sso.v1.ExchangeCodeRequest
-	(*ExchangeCodeResponse)(nil),  // 1: renice.sso.v1.ExchangeCodeResponse
-	(*User)(nil),                  // 2: renice.sso.v1.User
-	(*GrantAppRequest)(nil),       // 3: renice.sso.v1.GrantAppRequest
-	(*GrantAppResponse)(nil),      // 4: renice.sso.v1.GrantAppResponse
-	(*RevokeAppRequest)(nil),      // 5: renice.sso.v1.RevokeAppRequest
-	(*RevokeAppResponse)(nil),     // 6: renice.sso.v1.RevokeAppResponse
-	(*ListGrantsRequest)(nil),     // 7: renice.sso.v1.ListGrantsRequest
-	(*ListGrantsResponse)(nil),    // 8: renice.sso.v1.ListGrantsResponse
-	(*Grant)(nil),                 // 9: renice.sso.v1.Grant
-	(*timestamppb.Timestamp)(nil), // 10: google.protobuf.Timestamp
+	(*ExchangeCodeRequest)(nil),           // 0: renice.sso.v1.ExchangeCodeRequest
+	(*ExchangeCodeResponse)(nil),          // 1: renice.sso.v1.ExchangeCodeResponse
+	(*User)(nil),                          // 2: renice.sso.v1.User
+	(*GrantAppRequest)(nil),               // 3: renice.sso.v1.GrantAppRequest
+	(*GrantAppResponse)(nil),              // 4: renice.sso.v1.GrantAppResponse
+	(*RevokeAppRequest)(nil),              // 5: renice.sso.v1.RevokeAppRequest
+	(*RevokeAppResponse)(nil),             // 6: renice.sso.v1.RevokeAppResponse
+	(*ListGrantsRequest)(nil),             // 7: renice.sso.v1.ListGrantsRequest
+	(*ListGrantsResponse)(nil),            // 8: renice.sso.v1.ListGrantsResponse
+	(*Grant)(nil),                         // 9: renice.sso.v1.Grant
+	(*GetUserPreferencesRequest)(nil),     // 10: renice.sso.v1.GetUserPreferencesRequest
+	(*GetUserPreferencesResponse)(nil),    // 11: renice.sso.v1.GetUserPreferencesResponse
+	(*UpdateUserPreferencesRequest)(nil),  // 12: renice.sso.v1.UpdateUserPreferencesRequest
+	(*UpdateUserPreferencesResponse)(nil), // 13: renice.sso.v1.UpdateUserPreferencesResponse
+	nil,                                   // 14: renice.sso.v1.ExchangeCodeResponse.PreferencesEntry
+	nil,                                   // 15: renice.sso.v1.GetUserPreferencesResponse.PreferencesEntry
+	nil,                                   // 16: renice.sso.v1.UpdateUserPreferencesRequest.PreferencesEntry
+	nil,                                   // 17: renice.sso.v1.UpdateUserPreferencesResponse.PreferencesEntry
+	(*timestamppb.Timestamp)(nil),         // 18: google.protobuf.Timestamp
 }
 var file_renice_sso_v1_sso_proto_depIdxs = []int32{
 	2,  // 0: renice.sso.v1.ExchangeCodeResponse.user:type_name -> renice.sso.v1.User
-	10, // 1: renice.sso.v1.User.created_at:type_name -> google.protobuf.Timestamp
-	10, // 2: renice.sso.v1.GrantAppResponse.granted_at:type_name -> google.protobuf.Timestamp
-	9,  // 3: renice.sso.v1.ListGrantsResponse.grants:type_name -> renice.sso.v1.Grant
-	10, // 4: renice.sso.v1.Grant.granted_at:type_name -> google.protobuf.Timestamp
-	0,  // 5: renice.sso.v1.SSOService.ExchangeCode:input_type -> renice.sso.v1.ExchangeCodeRequest
-	3,  // 6: renice.sso.v1.SSOService.GrantApp:input_type -> renice.sso.v1.GrantAppRequest
-	5,  // 7: renice.sso.v1.SSOService.RevokeApp:input_type -> renice.sso.v1.RevokeAppRequest
-	7,  // 8: renice.sso.v1.SSOService.ListGrants:input_type -> renice.sso.v1.ListGrantsRequest
-	1,  // 9: renice.sso.v1.SSOService.ExchangeCode:output_type -> renice.sso.v1.ExchangeCodeResponse
-	4,  // 10: renice.sso.v1.SSOService.GrantApp:output_type -> renice.sso.v1.GrantAppResponse
-	6,  // 11: renice.sso.v1.SSOService.RevokeApp:output_type -> renice.sso.v1.RevokeAppResponse
-	8,  // 12: renice.sso.v1.SSOService.ListGrants:output_type -> renice.sso.v1.ListGrantsResponse
-	9,  // [9:13] is the sub-list for method output_type
-	5,  // [5:9] is the sub-list for method input_type
-	5,  // [5:5] is the sub-list for extension type_name
-	5,  // [5:5] is the sub-list for extension extendee
-	0,  // [0:5] is the sub-list for field type_name
+	14, // 1: renice.sso.v1.ExchangeCodeResponse.preferences:type_name -> renice.sso.v1.ExchangeCodeResponse.PreferencesEntry
+	18, // 2: renice.sso.v1.User.created_at:type_name -> google.protobuf.Timestamp
+	18, // 3: renice.sso.v1.GrantAppResponse.granted_at:type_name -> google.protobuf.Timestamp
+	9,  // 4: renice.sso.v1.ListGrantsResponse.grants:type_name -> renice.sso.v1.Grant
+	18, // 5: renice.sso.v1.Grant.granted_at:type_name -> google.protobuf.Timestamp
+	15, // 6: renice.sso.v1.GetUserPreferencesResponse.preferences:type_name -> renice.sso.v1.GetUserPreferencesResponse.PreferencesEntry
+	18, // 7: renice.sso.v1.GetUserPreferencesResponse.updated_at:type_name -> google.protobuf.Timestamp
+	16, // 8: renice.sso.v1.UpdateUserPreferencesRequest.preferences:type_name -> renice.sso.v1.UpdateUserPreferencesRequest.PreferencesEntry
+	17, // 9: renice.sso.v1.UpdateUserPreferencesResponse.preferences:type_name -> renice.sso.v1.UpdateUserPreferencesResponse.PreferencesEntry
+	18, // 10: renice.sso.v1.UpdateUserPreferencesResponse.updated_at:type_name -> google.protobuf.Timestamp
+	0,  // 11: renice.sso.v1.SSOService.ExchangeCode:input_type -> renice.sso.v1.ExchangeCodeRequest
+	3,  // 12: renice.sso.v1.SSOService.GrantApp:input_type -> renice.sso.v1.GrantAppRequest
+	5,  // 13: renice.sso.v1.SSOService.RevokeApp:input_type -> renice.sso.v1.RevokeAppRequest
+	7,  // 14: renice.sso.v1.SSOService.ListGrants:input_type -> renice.sso.v1.ListGrantsRequest
+	10, // 15: renice.sso.v1.SSOService.GetUserPreferences:input_type -> renice.sso.v1.GetUserPreferencesRequest
+	12, // 16: renice.sso.v1.SSOService.UpdateUserPreferences:input_type -> renice.sso.v1.UpdateUserPreferencesRequest
+	1,  // 17: renice.sso.v1.SSOService.ExchangeCode:output_type -> renice.sso.v1.ExchangeCodeResponse
+	4,  // 18: renice.sso.v1.SSOService.GrantApp:output_type -> renice.sso.v1.GrantAppResponse
+	6,  // 19: renice.sso.v1.SSOService.RevokeApp:output_type -> renice.sso.v1.RevokeAppResponse
+	8,  // 20: renice.sso.v1.SSOService.ListGrants:output_type -> renice.sso.v1.ListGrantsResponse
+	11, // 21: renice.sso.v1.SSOService.GetUserPreferences:output_type -> renice.sso.v1.GetUserPreferencesResponse
+	13, // 22: renice.sso.v1.SSOService.UpdateUserPreferences:output_type -> renice.sso.v1.UpdateUserPreferencesResponse
+	17, // [17:23] is the sub-list for method output_type
+	11, // [11:17] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_renice_sso_v1_sso_proto_init() }
@@ -759,7 +1065,7 @@ func file_renice_sso_v1_sso_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_renice_sso_v1_sso_proto_rawDesc), len(file_renice_sso_v1_sso_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   10,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

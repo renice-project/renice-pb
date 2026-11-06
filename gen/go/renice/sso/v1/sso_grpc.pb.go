@@ -19,10 +19,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	SSOService_ExchangeCode_FullMethodName = "/renice.sso.v1.SSOService/ExchangeCode"
-	SSOService_GrantApp_FullMethodName     = "/renice.sso.v1.SSOService/GrantApp"
-	SSOService_RevokeApp_FullMethodName    = "/renice.sso.v1.SSOService/RevokeApp"
-	SSOService_ListGrants_FullMethodName   = "/renice.sso.v1.SSOService/ListGrants"
+	SSOService_ExchangeCode_FullMethodName          = "/renice.sso.v1.SSOService/ExchangeCode"
+	SSOService_GrantApp_FullMethodName              = "/renice.sso.v1.SSOService/GrantApp"
+	SSOService_RevokeApp_FullMethodName             = "/renice.sso.v1.SSOService/RevokeApp"
+	SSOService_ListGrants_FullMethodName            = "/renice.sso.v1.SSOService/ListGrants"
+	SSOService_GetUserPreferences_FullMethodName    = "/renice.sso.v1.SSOService/GetUserPreferences"
+	SSOService_UpdateUserPreferences_FullMethodName = "/renice.sso.v1.SSOService/UpdateUserPreferences"
 )
 
 // SSOServiceClient is the client API for SSOService service.
@@ -90,6 +92,33 @@ type SSOServiceClient interface {
 	//
 	// 业务例子：renice-infra 每 10 分钟调一次，翻完所有页，和自己的 admin 列表对一遍。
 	ListGrants(ctx context.Context, in *ListGrantsRequest, opts ...grpc.CallOption) (*ListGrantsResponse, error)
+	// GetUserPreferences 读取用户在 SSO 里的跨服务统一偏好设置（以 KV 形式返回已注册的所有设置项，未曾写过的键按服务端注册表的默认值补齐）。
+	//
+	// 鉴权与错误码：
+	//
+	// 1. client_id 不存在、客户端已停用，或者 client_secret 不对 → UNAUTHENTICATED。
+	// 2. user_id 不是正数 → INVALID_ARGUMENT。
+	// 3. 用户不存在 → NOT_FOUND。用户已停用时返回 PERMISSION_DENIED「账号已停用」，与 ExchangeCode 口径一致。
+	// 4. 用户存在但从未改过任何设置 → 成功，preferences 返回全部已注册键的默认值（例如 theme_mode="light"、dark_ink="crisp"），updated_at 不填（nil）。
+	//
+	// 业务例子：用户在 renice-oj 把外观切成冰川夜色后打开已经登录着的 renice-infra，renice-infra 后端本地 60 秒缓存过期时调
+	// GetUserPreferences(user_id=10001) 拉取最新设置。
+	GetUserPreferences(ctx context.Context, in *GetUserPreferencesRequest, opts ...grpc.CallOption) (*GetUserPreferencesResponse, error)
+	// UpdateUserPreferences 按键局部更新用户在 SSO 里的跨服务统一偏好设置。
+	//
+	// 只更新 preferences 里传入的那几个键，未传入的键原样保留，不同服务并发改不同键互不覆盖；返回合并默认值后的完整设置表。
+	// 虽然协议层用 map<string, string> 保证后续新增设置项免改 proto，但 SSO 服务端维护受控键注册表做白名单和枚举校验，不接受随意塞入未知键。
+	//
+	// 鉴权与错误码：
+	//
+	// 1. client_id 不存在、客户端已停用，或者 client_secret 不对 → UNAUTHENTICATED。
+	// 2. user_id 不是正数、preferences 为空、包含未在 SSO 注册的键，或值不符合该键的校验规则（例如 theme_mode 传了 "blue"）→ INVALID_ARGUMENT，错误信息写明哪个键不对。
+	// 3. 用户不存在 → NOT_FOUND；用户已停用 → PERMISSION_DENIED「账号已停用」。
+	// 4. 重复写入相同键值是幂等的。
+	//
+	// 业务例子：用户在 renice-oj 侧栏点月亮图标切换到夜间模式，renice-oj 后端收到 PATCH 后调
+	// UpdateUserPreferences(user_id=10001, preferences={"theme_mode": "dark"}) 推回 SSO。
+	UpdateUserPreferences(ctx context.Context, in *UpdateUserPreferencesRequest, opts ...grpc.CallOption) (*UpdateUserPreferencesResponse, error)
 }
 
 type sSOServiceClient struct {
@@ -134,6 +163,26 @@ func (c *sSOServiceClient) ListGrants(ctx context.Context, in *ListGrantsRequest
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListGrantsResponse)
 	err := c.cc.Invoke(ctx, SSOService_ListGrants_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sSOServiceClient) GetUserPreferences(ctx context.Context, in *GetUserPreferencesRequest, opts ...grpc.CallOption) (*GetUserPreferencesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetUserPreferencesResponse)
+	err := c.cc.Invoke(ctx, SSOService_GetUserPreferences_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sSOServiceClient) UpdateUserPreferences(ctx context.Context, in *UpdateUserPreferencesRequest, opts ...grpc.CallOption) (*UpdateUserPreferencesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateUserPreferencesResponse)
+	err := c.cc.Invoke(ctx, SSOService_UpdateUserPreferences_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -205,6 +254,33 @@ type SSOServiceServer interface {
 	//
 	// 业务例子：renice-infra 每 10 分钟调一次，翻完所有页，和自己的 admin 列表对一遍。
 	ListGrants(context.Context, *ListGrantsRequest) (*ListGrantsResponse, error)
+	// GetUserPreferences 读取用户在 SSO 里的跨服务统一偏好设置（以 KV 形式返回已注册的所有设置项，未曾写过的键按服务端注册表的默认值补齐）。
+	//
+	// 鉴权与错误码：
+	//
+	// 1. client_id 不存在、客户端已停用，或者 client_secret 不对 → UNAUTHENTICATED。
+	// 2. user_id 不是正数 → INVALID_ARGUMENT。
+	// 3. 用户不存在 → NOT_FOUND。用户已停用时返回 PERMISSION_DENIED「账号已停用」，与 ExchangeCode 口径一致。
+	// 4. 用户存在但从未改过任何设置 → 成功，preferences 返回全部已注册键的默认值（例如 theme_mode="light"、dark_ink="crisp"），updated_at 不填（nil）。
+	//
+	// 业务例子：用户在 renice-oj 把外观切成冰川夜色后打开已经登录着的 renice-infra，renice-infra 后端本地 60 秒缓存过期时调
+	// GetUserPreferences(user_id=10001) 拉取最新设置。
+	GetUserPreferences(context.Context, *GetUserPreferencesRequest) (*GetUserPreferencesResponse, error)
+	// UpdateUserPreferences 按键局部更新用户在 SSO 里的跨服务统一偏好设置。
+	//
+	// 只更新 preferences 里传入的那几个键，未传入的键原样保留，不同服务并发改不同键互不覆盖；返回合并默认值后的完整设置表。
+	// 虽然协议层用 map<string, string> 保证后续新增设置项免改 proto，但 SSO 服务端维护受控键注册表做白名单和枚举校验，不接受随意塞入未知键。
+	//
+	// 鉴权与错误码：
+	//
+	// 1. client_id 不存在、客户端已停用，或者 client_secret 不对 → UNAUTHENTICATED。
+	// 2. user_id 不是正数、preferences 为空、包含未在 SSO 注册的键，或值不符合该键的校验规则（例如 theme_mode 传了 "blue"）→ INVALID_ARGUMENT，错误信息写明哪个键不对。
+	// 3. 用户不存在 → NOT_FOUND；用户已停用 → PERMISSION_DENIED「账号已停用」。
+	// 4. 重复写入相同键值是幂等的。
+	//
+	// 业务例子：用户在 renice-oj 侧栏点月亮图标切换到夜间模式，renice-oj 后端收到 PATCH 后调
+	// UpdateUserPreferences(user_id=10001, preferences={"theme_mode": "dark"}) 推回 SSO。
+	UpdateUserPreferences(context.Context, *UpdateUserPreferencesRequest) (*UpdateUserPreferencesResponse, error)
 	mustEmbedUnimplementedSSOServiceServer()
 }
 
@@ -226,6 +302,12 @@ func (UnimplementedSSOServiceServer) RevokeApp(context.Context, *RevokeAppReques
 }
 func (UnimplementedSSOServiceServer) ListGrants(context.Context, *ListGrantsRequest) (*ListGrantsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListGrants not implemented")
+}
+func (UnimplementedSSOServiceServer) GetUserPreferences(context.Context, *GetUserPreferencesRequest) (*GetUserPreferencesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetUserPreferences not implemented")
+}
+func (UnimplementedSSOServiceServer) UpdateUserPreferences(context.Context, *UpdateUserPreferencesRequest) (*UpdateUserPreferencesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateUserPreferences not implemented")
 }
 func (UnimplementedSSOServiceServer) mustEmbedUnimplementedSSOServiceServer() {}
 func (UnimplementedSSOServiceServer) testEmbeddedByValue()                    {}
@@ -320,6 +402,42 @@ func _SSOService_ListGrants_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SSOService_GetUserPreferences_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetUserPreferencesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SSOServiceServer).GetUserPreferences(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SSOService_GetUserPreferences_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SSOServiceServer).GetUserPreferences(ctx, req.(*GetUserPreferencesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SSOService_UpdateUserPreferences_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateUserPreferencesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SSOServiceServer).UpdateUserPreferences(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SSOService_UpdateUserPreferences_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SSOServiceServer).UpdateUserPreferences(ctx, req.(*UpdateUserPreferencesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // SSOService_ServiceDesc is the grpc.ServiceDesc for SSOService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -342,6 +460,14 @@ var SSOService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListGrants",
 			Handler:    _SSOService_ListGrants_Handler,
+		},
+		{
+			MethodName: "GetUserPreferences",
+			Handler:    _SSOService_GetUserPreferences_Handler,
+		},
+		{
+			MethodName: "UpdateUserPreferences",
+			Handler:    _SSOService_UpdateUserPreferences_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
