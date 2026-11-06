@@ -114,7 +114,7 @@ type SSOServiceClient interface {
 	// 1. client_id 不存在、客户端已停用，或者 client_secret 不对 → UNAUTHENTICATED。
 	// 2. user_id 不是正数、preferences 为空、包含未在 SSO 注册的键，或值不符合该键的校验规则（例如 theme_mode 传了 "blue"）→ INVALID_ARGUMENT，错误信息写明哪个键不对。
 	// 3. 用户不存在 → NOT_FOUND；用户已停用 → PERMISSION_DENIED「账号已停用」。
-	// 4. 重复写入相同键值是幂等的。
+	// 4. 重复写入相同键值或显式写入默认值时，同样会持久化对应键值行并刷新 updated_at（因此 UpdateUserPreferencesResponse.updated_at 始终非空）。
 	//
 	// 业务例子：用户在 renice-oj 侧栏点月亮图标切换到夜间模式，renice-oj 后端收到 PATCH 后调
 	// UpdateUserPreferences(user_id=10001, preferences={"theme_mode": "dark"}) 推回 SSO。
@@ -276,7 +276,7 @@ type SSOServiceServer interface {
 	// 1. client_id 不存在、客户端已停用，或者 client_secret 不对 → UNAUTHENTICATED。
 	// 2. user_id 不是正数、preferences 为空、包含未在 SSO 注册的键，或值不符合该键的校验规则（例如 theme_mode 传了 "blue"）→ INVALID_ARGUMENT，错误信息写明哪个键不对。
 	// 3. 用户不存在 → NOT_FOUND；用户已停用 → PERMISSION_DENIED「账号已停用」。
-	// 4. 重复写入相同键值是幂等的。
+	// 4. 重复写入相同键值或显式写入默认值时，同样会持久化对应键值行并刷新 updated_at（因此 UpdateUserPreferencesResponse.updated_at 始终非空）。
 	//
 	// 业务例子：用户在 renice-oj 侧栏点月亮图标切换到夜间模式，renice-oj 后端收到 PATCH 后调
 	// UpdateUserPreferences(user_id=10001, preferences={"theme_mode": "dark"}) 推回 SSO。

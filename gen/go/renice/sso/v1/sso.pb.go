@@ -850,7 +850,7 @@ type UpdateUserPreferencesResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// 更新完成后、合并服务端默认值的完整偏好设置键值表。例：{"theme_mode": "dark", "dark_ink": "crisp"}
 	Preferences map[string]string `protobuf:"bytes,1,rep,name=preferences,proto3" json:"preferences,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	// 本次更新后该用户偏好记录的最新修改时间。例：2026-11-06T11:30:00+08:00
+	// 本次更新后该用户偏好记录的最新修改时间（每次成功调用 UpdateUserPreferences 都会持久化传入键值并刷新时间，始终非空）。例：2026-11-06T11:30:00+08:00
 	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
