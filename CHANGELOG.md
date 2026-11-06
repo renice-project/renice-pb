@@ -4,6 +4,8 @@
 
 ## 未发布
 
+- 新增 `renice.sso.v1.SSOService.GetUserPreferences` / `UpdateUserPreferences`，并在 `ExchangeCodeResponse` 中增加 `preferences` 字段，用键值表（`map<string, string>`）读写跨服务统一偏好设置（第一期支持外观 `theme_mode` 与 `dark_ink`，后续新增键无需改动 proto）。背景：各子服务需要统一同步日夜模式与夜间字色预设，并支持动态扩容新设置项（2026-11-06 ice 定）。
+
 - 新增发布单元 compose / env 文件的读取与在线改写命令（`ComposeFilesRead`、`ComposeFileWrite`）及结果（`ComposeFiles`、`ComposeFileWritten`），带文件摘要、git 状态与镜像变量检查；命令号段新增 60–69。背景：renice-infra 要在管理端直接改服务环境的 compose 与 .env。
 
 - 新增 agent 命令通道信封及探测、日志、发布、构建、解析契约，明确角色、超时、取消、断线、凭据与探测指标白名单；PSI 增加 CPU full 可用性标记。
