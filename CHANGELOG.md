@@ -4,6 +4,8 @@
 
 ## 未发布
 
+- `ExchangeCodeResponse` 增加 `sso_session_id`：来源 SSO 会话的关联 ID，调用方绑定进自己签的 AT / RT，之后按公开的共享 Redis 会话契约（`<session_key_prefix>:<sso_sid>`，值是规范十进制正整数 uid）只读验活，SSO 登出即失效；各服务仍自签 AT/RT，不新增逐请求验活 RPC，也不额外暴露 key 名、RT hash 或 token。同时更正 `ExchangeCode` 注释里「SSO 不参与调用方后续的会话」的说法。背景：子系统原来只认自己签的 AT/RT，SSO 退出并换号后仍能用旧会话继续访问（2026-11-11 ice 定）。
+
 - 新增 `renice.sso.v1.SSOService.GetUserPreferences` / `UpdateUserPreferences`，并在 `ExchangeCodeResponse` 中增加 `preferences` 字段，用键值表（`map<string, string>`）读写跨服务统一偏好设置（第一期支持外观 `theme_mode` 与 `dark_ink`，后续新增键无需改动 proto）。背景：各子服务需要统一同步日夜模式与夜间字色预设，并支持动态扩容新设置项（2026-11-06 ice 定）。
 
 - 新增发布单元 compose / env 文件的读取与在线改写命令（`ComposeFilesRead`、`ComposeFileWrite`）及结果（`ComposeFiles`、`ComposeFileWritten`），带文件摘要、git 状态与镜像变量检查；命令号段新增 60–69。背景：renice-infra 要在管理端直接改服务环境的 compose 与 .env。

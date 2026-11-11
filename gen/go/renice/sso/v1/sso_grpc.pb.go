@@ -44,7 +44,10 @@ type SSOServiceClient interface {
 	//    走到这一步 code 就已经被消耗，哪怕后面失败也不能再用。
 	// 3. 用户已在 SSO 被停用 → PERMISSION_DENIED「账号已停用」，调用方应提示用户而不是重试。
 	//
-	// 换到身份之后，由调用方自己签发 AT/RT，SSO 不参与调用方后续的会话；SSO 自己的角色（sys / ops / admin / user）不随身份返回，各服务的权限各自管理。
+	// 换到身份之后，AT/RT 仍由调用方自己签发；SSO 另外只在共享 Redis 里维护来源 SSO 会话的存活记录。
+	// 调用方把返回的 sso_session_id 绑定进自己的 AT / RT 会话，之后鉴权按公开的共享 Redis 会话契约只读验活，
+	// 不逐请求回调 SSO，也没有额外的验活 RPC；SSO 登出删掉记录后，用旧会话的子系统随即失效（其他设备不受影响）。
+	// SSO 自己的角色（sys / ops / admin / user）不随身份返回，各服务的权限各自管理。
 	//
 	// 业务例子：用户在 renice-oj 点「用 renice 账号登录」，在 SSO 登录成功后被带回
 	// https://oj.renice.cc/api/v1/auth/callback?code=...，renice-oj 后端拿这个 code 来换出 ice 的身份。
@@ -206,7 +209,10 @@ type SSOServiceServer interface {
 	//    走到这一步 code 就已经被消耗，哪怕后面失败也不能再用。
 	// 3. 用户已在 SSO 被停用 → PERMISSION_DENIED「账号已停用」，调用方应提示用户而不是重试。
 	//
-	// 换到身份之后，由调用方自己签发 AT/RT，SSO 不参与调用方后续的会话；SSO 自己的角色（sys / ops / admin / user）不随身份返回，各服务的权限各自管理。
+	// 换到身份之后，AT/RT 仍由调用方自己签发；SSO 另外只在共享 Redis 里维护来源 SSO 会话的存活记录。
+	// 调用方把返回的 sso_session_id 绑定进自己的 AT / RT 会话，之后鉴权按公开的共享 Redis 会话契约只读验活，
+	// 不逐请求回调 SSO，也没有额外的验活 RPC；SSO 登出删掉记录后，用旧会话的子系统随即失效（其他设备不受影响）。
+	// SSO 自己的角色（sys / ops / admin / user）不随身份返回，各服务的权限各自管理。
 	//
 	// 业务例子：用户在 renice-oj 点「用 renice 账号登录」，在 SSO 登录成功后被带回
 	// https://oj.renice.cc/api/v1/auth/callback?code=...，renice-oj 后端拿这个 code 来换出 ice 的身份。

@@ -17,7 +17,10 @@ service SSOService {
   //    走到这一步 code 就已经被消耗，哪怕后面失败也不能再用。
   // 3. 用户已在 SSO 被停用 → PERMISSION_DENIED「账号已停用」，调用方应提示用户而不是重试。
   //
-  // 换到身份之后，由调用方自己签发 AT/RT，SSO 不参与调用方后续的会话；SSO 自己的角色（sys / ops / admin / user）不随身份返回，各服务的权限各自管理。
+  // 换到身份之后，AT/RT 仍由调用方自己签发；SSO 另外只在共享 Redis 里维护来源 SSO 会话的存活记录。
+  // 调用方把返回的 sso_session_id 绑定进自己的 AT / RT 会话，之后鉴权按公开的共享 Redis 会话契约只读验活，
+  // 不逐请求回调 SSO，也没有额外的验活 RPC；SSO 登出删掉记录后，用旧会话的子系统随即失效（其他设备不受影响）。
+  // SSO 自己的角色（sys / ops / admin / user）不随身份返回，各服务的权限各自管理。
   //
   // 业务例子：用户在 renice-oj 点「用 renice 账号登录」，在 SSO 登录成功后被带回
   // https://oj.renice.cc/api/v1/auth/callback?code=...，renice-oj 后端拿这个 code 来换出 ice 的身份。
@@ -117,6 +120,12 @@ message ExchangeCodeResponse {
   User user = 1;
   // 该用户的跨服务统一偏好设置（已合并服务端注册表默认值），登录换码时顺路带回，省掉一次额外 RPC。例：{"theme_mode": "dark", "dark_ink": "crisp"}
   map<string, string> preferences = 2;
+  // 这次登录所依附的来源 SSO 会话 ID：调用方当作不透明字符串原样保存，不要解析，也不要自己生成。
+  // 换码后调用方把它写进自己签的 AT claim 和 RT 会话；鉴权时按公开的共享 Redis 会话契约只读查一条记录验活
+  // （键 `<session_key_prefix>:<sso_sid>`，默认前缀 renice-sso:session:v1，值是规范十进制正整数 uid，TTL 与来源 SSO 会话剩余寿命一致），
+  // 记录缺失、uid 对不上或内容不合法都算会话失效。它只是关联 ID，不是 bearer 凭证：不能拿它调 SSO、换 token 或代表用户身份。
+  // 例："3f8a1c9e2b7d4f60a1b2c3d4"
+  string sso_session_id = 3;
 }
 
 // User 是 SSO 里的一个用户。各服务一律用 id 关联本地数据，不要用 username 或 email。

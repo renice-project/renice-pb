@@ -101,7 +101,13 @@ type ExchangeCodeResponse struct {
 	// 这次登录的用户。例：{id: 10001, username: "ice", display_name: "冰", email: "ice@renice.cc"}
 	User *User `protobuf:"bytes,1,opt,name=user,proto3" json:"user,omitempty"`
 	// 该用户的跨服务统一偏好设置（已合并服务端注册表默认值），登录换码时顺路带回，省掉一次额外 RPC。例：{"theme_mode": "dark", "dark_ink": "crisp"}
-	Preferences   map[string]string `protobuf:"bytes,2,rep,name=preferences,proto3" json:"preferences,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Preferences map[string]string `protobuf:"bytes,2,rep,name=preferences,proto3" json:"preferences,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// 这次登录所依附的来源 SSO 会话 ID：调用方当作不透明字符串原样保存，不要解析，也不要自己生成。
+	// 换码后调用方把它写进自己签的 AT claim 和 RT 会话；鉴权时按公开的共享 Redis 会话契约只读查一条记录验活
+	// （键 `<session_key_prefix>:<sso_sid>`，默认前缀 renice-sso:session:v1，值是规范十进制正整数 uid，TTL 与来源 SSO 会话剩余寿命一致），
+	// 记录缺失、uid 对不上或内容不合法都算会话失效。它只是关联 ID，不是 bearer 凭证：不能拿它调 SSO、换 token 或代表用户身份。
+	// 例："3f8a1c9e2b7d4f60a1b2c3d4"
+	SsoSessionId  string `protobuf:"bytes,3,opt,name=sso_session_id,json=ssoSessionId,proto3" json:"sso_session_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -148,6 +154,13 @@ func (x *ExchangeCodeResponse) GetPreferences() map[string]string {
 		return x.Preferences
 	}
 	return nil
+}
+
+func (x *ExchangeCodeResponse) GetSsoSessionId() string {
+	if x != nil {
+		return x.SsoSessionId
+	}
+	return ""
 }
 
 // User 是 SSO 里的一个用户。各服务一律用 id 关联本地数据，不要用 username 或 email。
@@ -909,10 +922,11 @@ const file_renice_sso_v1_sso_proto_rawDesc = "" +
 	"\x04code\x18\x01 \x01(\tR\x04code\x12\x1b\n" +
 	"\tclient_id\x18\x02 \x01(\tR\bclientId\x12#\n" +
 	"\rclient_secret\x18\x03 \x01(\tR\fclientSecret\x12!\n" +
-	"\fredirect_uri\x18\x04 \x01(\tR\vredirectUri\"\xd7\x01\n" +
+	"\fredirect_uri\x18\x04 \x01(\tR\vredirectUri\"\xfd\x01\n" +
 	"\x14ExchangeCodeResponse\x12'\n" +
 	"\x04user\x18\x01 \x01(\v2\x13.renice.sso.v1.UserR\x04user\x12V\n" +
-	"\vpreferences\x18\x02 \x03(\v24.renice.sso.v1.ExchangeCodeResponse.PreferencesEntryR\vpreferences\x1a>\n" +
+	"\vpreferences\x18\x02 \x03(\v24.renice.sso.v1.ExchangeCodeResponse.PreferencesEntryR\vpreferences\x12$\n" +
+	"\x0esso_session_id\x18\x03 \x01(\tR\fssoSessionId\x1a>\n" +
 	"\x10PreferencesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xc5\x01\n" +
