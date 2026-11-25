@@ -148,9 +148,33 @@ service SSOService {
   // 2. user_id 不是正数、缺少 header、header 不是第一条、重复 header、request_id 为空、累计 chunk 为 0 → INVALID_ARGUMENT。
   // 3. 用户不存在 → NOT_FOUND；用户已停用 → PERMISSION_DENIED「账号已停用」。
   // 4. 图片内容不是允许的格式、解码失败、尺寸不合法 → INVALID_ARGUMENT。
-  // 5. 文件累计超过 5242880 字节 → RESOURCE_EXHAUSTED，details 带 google.rpc.ErrorInfo，reason="AVATAR_TOO_LARGE"，
-  //    metadata 里放当前 AvatarConstraints 的 JSON；本月 3 次额度已用完 → RESOURCE_EXHAUSTED，reason="AVATAR_QUOTA_EXHAUSTED"，
-  //    metadata 里放当前 AvatarQuota 的 JSON（remaining 为 0）。
+  // 5. 文件累计超过 5242880 字节 → RESOURCE_EXHAUSTED，reason="AVATAR_TOO_LARGE"；
+  //    本月 3 次额度已用完 → RESOURCE_EXHAUSTED，reason="AVATAR_QUOTA_EXHAUSTED"。
+  //    这两种都在 details 里带一条 google.rpc.ErrorInfo，domain 都是 "renice.sso"，metadata 的键和编码规则固定如下，
+  //    SSO 与所有调用方必须按同一套实现，不能各自发挥：
+  //
+  //    a. metadata 里本次错误只放一个键，键名固定、大小写敏感：额度用尽 → "quota"，放当前 AvatarQuota；
+  //       文件过大 → "constraints"，放当前 AvatarConstraints。不要换成 quota_json 之类的别名，也不要把两个键都塞进去，
+  //       更不能把两种消息配错键。
+  //    b. metadata 的值必须是对应消息的 ProtoJSON 文本，生成端固定用 google.golang.org/protobuf/encoding/protojson 的
+  //       MarshalOptions{EmitUnpopulated: true}：字段名用 lowerCamelCase（resetsAt、maxBytes），
+  //       google.protobuf.Timestamp 编成 RFC 3339 的 UTC 字符串（"2026-11-30T16:00:00Z"，不是 {"seconds":1796054400} 这种对象），
+  //       int64 编成 JSON 字符串（maxBytes 是 "5242880"），int32 编成 JSON 数字，
+  //       零值也显式输出（额度用完时 remaining 必须是 0，不能省略）。
+  //    c. 消费端直接用 protojson.Unmarshal 把 metadata 的值解析回 AvatarQuota / AvatarConstraints，不要先转成 map[string]any 再手拼；
+  //       不认识的 metadata 键忽略，本次错误对应的键缺失时按对应消息的默认值兜底，但不要把错误本身吞掉。
+  //    d. 不要用 encoding/json 直接序列化生成的 Go 类型：它按 Go 结构体出键（resets_at）、把 Timestamp 编成 {"seconds":1796054400}，
+  //       还会因为 omitempty 省略 remaining，这样的值消费端 protojson.Unmarshal 会报 unexpected token {。
+  //
+  //    额度用尽的完整例子（details 里只有这一条 ErrorInfo，等号右边就是 metadata 字符串的完整内容）：
+  //      reason = "AVATAR_QUOTA_EXHAUSTED"
+  //      domain = "renice.sso"
+  //      metadata["quota"] = {"month":"2026-11","limit":3,"used":3,"remaining":0,"resetsAt":"2026-11-30T16:00:00Z"}
+  //    文件过大的完整例子：
+  //      reason = "AVATAR_TOO_LARGE"
+  //      domain = "renice.sso"
+  //      metadata["constraints"] = {"maxBytes":"5242880","formats":["jpeg","png","gif","webp"],"animationAllowed":true}
+  //    上面的两段 metadata 值都能用 protojson.Unmarshal 原样解析回对应消息，生成端照着拼即可。
   // 6. 同一 (user_id, request_id) 已提交过不同内容 → ALREADY_EXISTS。
   // 7. 存储写失败 → INTERNAL；存储暂时不可用 → UNAVAILABLE。
   //
