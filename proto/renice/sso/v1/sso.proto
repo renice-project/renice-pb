@@ -127,8 +127,15 @@ service SSOService {
   //    第一条不是 header、出现第二条 header、header 之后一块 chunk 都没有 → INVALID_ARGUMENT。
   // 2. header 之后的消息只能带 chunk，每块建议不超过 65536 字节（64 KiB），累计不超过 5242880 字节（5 MiB）。
   //    5 MiB 按 64 KiB 分块是 80 块，所以协议必须是流式的。
-  // 3. 服务端在接收第一块文件数据之前先校验 header 里的客户端凭据，凭据不对立即 UNAUTHENTICATED，不会先收完再拒；
-  //    提交前再验一次用户状态和来源会话，会话在传输途中失效同样拒绝。
+  // 3. 鉴权分两次，第一次在接收文件数据之前完成；任一项不过就立即返回并结束流，不会把 chunk 收完再拒：
+  //    a. 收到第一条 header 后、读取第一块 chunk 之前，依次校验：
+  //       - client_id 不存在、客户端已停用、client_secret 不对 → UNAUTHENTICATED；
+  //       - user_id 不是正数、request_id 为空 → INVALID_ARGUMENT；
+  //       - 用户不存在 → NOT_FOUND；用户已停用 → PERMISSION_DENIED「账号已停用」；
+  //       - sso_session_id 为空、会话记录不存在 / 已过期，或记录里的 uid 与 user_id 不一致 → UNAUTHENTICATED。
+  //    b. 提交前（写存储、换版本、扣额度之前）再验一次用户状态和来源会话：传输途中用户被停用、会话过期或登出，
+  //       按与 a 相同的错误码拒绝，本次不产生新版本、不扣额度。
+  //    这个先后顺序是可观测的契约：无效 header 必须在读到第一块 chunk 之前就失败，SSO 实现的测试可以据此断言。
   // 4. 图片格式由服务端按内容嗅探判定，只接受 JPEG / PNG / GIF / WebP（GIF、动态 WebP 允许），
   //    不信任浏览器声明的 MIME，也不看原始文件名。
   //
