@@ -177,7 +177,10 @@ type User struct {
 	// 头像地址；没有头像时是空字符串。例："https://renice.cc/avatars/10086.png"
 	AvatarUrl string `protobuf:"bytes,5,opt,name=avatar_url,json=avatarUrl,proto3" json:"avatar_url,omitempty"`
 	// 在 SSO 注册的时间。例：2026-10-16T15:14:18+08:00
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	// 头像版本号，和 AvatarSnapshot.avatar_version 同源：换一次新头像加一，没有头像时为 0。
+	// 换码顺带返回它，调用方拼头像地址时不用再调一次 GetUserAvatar。例：7
+	AvatarVersion int64 `protobuf:"varint,7,opt,name=avatar_version,json=avatarVersion,proto3" json:"avatar_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -252,6 +255,13 @@ func (x *User) GetCreatedAt() *timestamppb.Timestamp {
 		return x.CreatedAt
 	}
 	return nil
+}
+
+func (x *User) GetAvatarVersion() int64 {
+	if x != nil {
+		return x.AvatarVersion
+	}
+	return 0
 }
 
 // GrantAppRequest 是 GrantApp 的入参。
@@ -913,6 +923,573 @@ func (x *UpdateUserPreferencesResponse) GetUpdatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+// GetUserAvatarRequest 是 GetUserAvatar 的入参。
+type GetUserAvatarRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 调用方在 SSO 登记的客户端 ID。例："renice-oj"
+	ClientId string `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	// 客户端密钥，只放在服务器的 .env 里。例："（见服务器 .env 的 APP_SSO_CLIENT_SECRET）"
+	ClientSecret string `protobuf:"bytes,2,opt,name=client_secret,json=clientSecret,proto3" json:"client_secret,omitempty"`
+	// 要读取头像的用户在 SSO 里的 ID，必须和 sso_session_id 会话记录里的 uid 一致。例：10001
+	UserId int64 `protobuf:"varint,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	// 这个用户的来源 SSO 会话 ID，和 ExchangeCodeResponse.sso_session_id 是同一个值。
+	// 它不是 bearer 凭证，只用来确认这次读取依附的会话仍然存活且属于 user_id。例："3f8a1c9e2b7d4f60a1b2c3d4"
+	SsoSessionId  string `protobuf:"bytes,4,opt,name=sso_session_id,json=ssoSessionId,proto3" json:"sso_session_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetUserAvatarRequest) Reset() {
+	*x = GetUserAvatarRequest{}
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetUserAvatarRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetUserAvatarRequest) ProtoMessage() {}
+
+func (x *GetUserAvatarRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetUserAvatarRequest.ProtoReflect.Descriptor instead.
+func (*GetUserAvatarRequest) Descriptor() ([]byte, []int) {
+	return file_renice_sso_v1_sso_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *GetUserAvatarRequest) GetClientId() string {
+	if x != nil {
+		return x.ClientId
+	}
+	return ""
+}
+
+func (x *GetUserAvatarRequest) GetClientSecret() string {
+	if x != nil {
+		return x.ClientSecret
+	}
+	return ""
+}
+
+func (x *GetUserAvatarRequest) GetUserId() int64 {
+	if x != nil {
+		return x.UserId
+	}
+	return 0
+}
+
+func (x *GetUserAvatarRequest) GetSsoSessionId() string {
+	if x != nil {
+		return x.SsoSessionId
+	}
+	return ""
+}
+
+// GetUserAvatarResponse 是 GetUserAvatar 的出参。
+type GetUserAvatarResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 用户当前的头像快照，连同本月额度和上传限制。例：{avatar_url: "https://renice.cc/api/v1/avatars/10001?v=7", avatar_version: 7, quota: {...}, constraints: {...}}
+	Avatar        *AvatarSnapshot `protobuf:"bytes,1,opt,name=avatar,proto3" json:"avatar,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetUserAvatarResponse) Reset() {
+	*x = GetUserAvatarResponse{}
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetUserAvatarResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetUserAvatarResponse) ProtoMessage() {}
+
+func (x *GetUserAvatarResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetUserAvatarResponse.ProtoReflect.Descriptor instead.
+func (*GetUserAvatarResponse) Descriptor() ([]byte, []int) {
+	return file_renice_sso_v1_sso_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *GetUserAvatarResponse) GetAvatar() *AvatarSnapshot {
+	if x != nil {
+		return x.Avatar
+	}
+	return nil
+}
+
+// UploadUserAvatarRequest 是 UploadUserAvatar 客户端流里的一条消息：第一条是 header，之后全是 chunk。
+type UploadUserAvatarRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 流里的负载，要么是唯一的 header，要么是一块文件字节，二者只能出现一个。
+	//
+	// Types that are valid to be assigned to Payload:
+	//
+	//	*UploadUserAvatarRequest_Header
+	//	*UploadUserAvatarRequest_Chunk
+	Payload       isUploadUserAvatarRequest_Payload `protobuf_oneof:"payload"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UploadUserAvatarRequest) Reset() {
+	*x = UploadUserAvatarRequest{}
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UploadUserAvatarRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UploadUserAvatarRequest) ProtoMessage() {}
+
+func (x *UploadUserAvatarRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UploadUserAvatarRequest.ProtoReflect.Descriptor instead.
+func (*UploadUserAvatarRequest) Descriptor() ([]byte, []int) {
+	return file_renice_sso_v1_sso_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *UploadUserAvatarRequest) GetPayload() isUploadUserAvatarRequest_Payload {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+func (x *UploadUserAvatarRequest) GetHeader() *UploadUserAvatarHeader {
+	if x != nil {
+		if x, ok := x.Payload.(*UploadUserAvatarRequest_Header); ok {
+			return x.Header
+		}
+	}
+	return nil
+}
+
+func (x *UploadUserAvatarRequest) GetChunk() []byte {
+	if x != nil {
+		if x, ok := x.Payload.(*UploadUserAvatarRequest_Chunk); ok {
+			return x.Chunk
+		}
+	}
+	return nil
+}
+
+type isUploadUserAvatarRequest_Payload interface {
+	isUploadUserAvatarRequest_Payload()
+}
+
+type UploadUserAvatarRequest_Header struct {
+	// 上传头，必须是流的第一条消息，整个流只能有一条。例：{client_id: "renice-infra", user_id: 10001, request_id: "a1b2c3d4"}
+	Header *UploadUserAvatarHeader `protobuf:"bytes,1,opt,name=header,proto3,oneof"`
+}
+
+type UploadUserAvatarRequest_Chunk struct {
+	// 文件内容的一块，建议不超过 65536 字节；累计上限 5242880 字节，5 MiB 按 64 KiB 算就是 80 块。例：b"\x89PNG\r\n\x1a\n..."
+	Chunk []byte `protobuf:"bytes,2,opt,name=chunk,proto3,oneof"`
+}
+
+func (*UploadUserAvatarRequest_Header) isUploadUserAvatarRequest_Payload() {}
+
+func (*UploadUserAvatarRequest_Chunk) isUploadUserAvatarRequest_Payload() {}
+
+// UploadUserAvatarHeader 是 UploadUserAvatar 流的第一条、也是唯一一条 header 消息，带着这次上传的身份和幂等键。
+type UploadUserAvatarHeader struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 调用方在 SSO 登记的客户端 ID。例："renice-infra"
+	ClientId string `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	// 客户端密钥，只放在服务器的 .env 里。例："（见服务器 .env 的 APP_SSO_CLIENT_SECRET）"
+	ClientSecret string `protobuf:"bytes,2,opt,name=client_secret,json=clientSecret,proto3" json:"client_secret,omitempty"`
+	// 要更换头像的用户在 SSO 里的 ID。例：10001
+	UserId int64 `protobuf:"varint,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	// 这个用户的来源 SSO 会话 ID，和 ExchangeCodeResponse.sso_session_id 是同一个值。
+	// 它不是 bearer 凭证，只用来确认这次上传依附的会话仍然存活且属于 user_id。例："3f8a1c9e2b7d4f60a1b2c3d4"
+	SsoSessionId string `protobuf:"bytes,4,opt,name=sso_session_id,json=ssoSessionId,proto3" json:"sso_session_id,omitempty"`
+	// 调用方生成的幂等键，作用域是 (user_id, request_id) 且跨 client 生效；重试必须复用同一个值。例："a1b2c3d4-upload-20261125"
+	RequestId     string `protobuf:"bytes,5,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UploadUserAvatarHeader) Reset() {
+	*x = UploadUserAvatarHeader{}
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UploadUserAvatarHeader) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UploadUserAvatarHeader) ProtoMessage() {}
+
+func (x *UploadUserAvatarHeader) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UploadUserAvatarHeader.ProtoReflect.Descriptor instead.
+func (*UploadUserAvatarHeader) Descriptor() ([]byte, []int) {
+	return file_renice_sso_v1_sso_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *UploadUserAvatarHeader) GetClientId() string {
+	if x != nil {
+		return x.ClientId
+	}
+	return ""
+}
+
+func (x *UploadUserAvatarHeader) GetClientSecret() string {
+	if x != nil {
+		return x.ClientSecret
+	}
+	return ""
+}
+
+func (x *UploadUserAvatarHeader) GetUserId() int64 {
+	if x != nil {
+		return x.UserId
+	}
+	return 0
+}
+
+func (x *UploadUserAvatarHeader) GetSsoSessionId() string {
+	if x != nil {
+		return x.SsoSessionId
+	}
+	return ""
+}
+
+func (x *UploadUserAvatarHeader) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+// UploadUserAvatarResponse 是 UploadUserAvatar 的出参。
+type UploadUserAvatarResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 上传完成后的头像快照，换图成功或同图重试都返回当前值。例：{avatar_url: "https://renice.cc/api/v1/avatars/10001?v=8", avatar_version: 8, quota: {...}, constraints: {...}}
+	Avatar *AvatarSnapshot `protobuf:"bytes,1,opt,name=avatar,proto3" json:"avatar,omitempty"`
+	// 这次是否真的换成了新头像：换了为 true 并扣一次额度；上传的图和当前头像完全相同、或同一次请求的重试为 false，不扣次数。例：true
+	Changed       bool `protobuf:"varint,2,opt,name=changed,proto3" json:"changed,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UploadUserAvatarResponse) Reset() {
+	*x = UploadUserAvatarResponse{}
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UploadUserAvatarResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UploadUserAvatarResponse) ProtoMessage() {}
+
+func (x *UploadUserAvatarResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UploadUserAvatarResponse.ProtoReflect.Descriptor instead.
+func (*UploadUserAvatarResponse) Descriptor() ([]byte, []int) {
+	return file_renice_sso_v1_sso_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *UploadUserAvatarResponse) GetAvatar() *AvatarSnapshot {
+	if x != nil {
+		return x.Avatar
+	}
+	return nil
+}
+
+func (x *UploadUserAvatarResponse) GetChanged() bool {
+	if x != nil {
+		return x.Changed
+	}
+	return false
+}
+
+// AvatarSnapshot 是一个用户当前头像的只读快照，连同这个月的上传额度和上传限制一起返回。
+type AvatarSnapshot struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 头像的绝对地址，格式固定为 <SSO 环境地址>/api/v1/avatars/{uid}?v={avatar_version}。
+	// 这是「稳定当前头像」地址，不承诺 immutable：同一个 v 下服务端可能修复重新生成，客户端按 Cache-Control 缓存即可；
+	// 换头像后 v 会变，地址随之变化，可以放心用 ?v= 破缓存。没有头像时返回统一默认图，avatar_version 为 0，地址同样稳定。
+	// 例："https://renice.cc/api/v1/avatars/10001?v=7"
+	AvatarUrl string `protobuf:"bytes,1,opt,name=avatar_url,json=avatarUrl,proto3" json:"avatar_url,omitempty"`
+	// 单用户单调递增的头像版本号，换一次新图加一，和 User.avatar_version 同源；没有头像时为 0。例：7
+	AvatarVersion int64 `protobuf:"varint,2,opt,name=avatar_version,json=avatarVersion,proto3" json:"avatar_version,omitempty"`
+	// 该用户本自然月的上传额度（所有子服务共享）。例：{month: "2026-11", limit: 3, used: 1, remaining: 2, resets_at: 2026-12-01T00:00:00+08:00}
+	Quota *AvatarQuota `protobuf:"bytes,3,opt,name=quota,proto3" json:"quota,omitempty"`
+	// 上传限制，客户端可以据此在选图后先本地预检，避免白传。例：{max_bytes: 5242880, formats: ["jpeg", "png", "gif", "webp"], animation_allowed: true}
+	Constraints   *AvatarConstraints `protobuf:"bytes,4,opt,name=constraints,proto3" json:"constraints,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AvatarSnapshot) Reset() {
+	*x = AvatarSnapshot{}
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AvatarSnapshot) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AvatarSnapshot) ProtoMessage() {}
+
+func (x *AvatarSnapshot) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AvatarSnapshot.ProtoReflect.Descriptor instead.
+func (*AvatarSnapshot) Descriptor() ([]byte, []int) {
+	return file_renice_sso_v1_sso_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *AvatarSnapshot) GetAvatarUrl() string {
+	if x != nil {
+		return x.AvatarUrl
+	}
+	return ""
+}
+
+func (x *AvatarSnapshot) GetAvatarVersion() int64 {
+	if x != nil {
+		return x.AvatarVersion
+	}
+	return 0
+}
+
+func (x *AvatarSnapshot) GetQuota() *AvatarQuota {
+	if x != nil {
+		return x.Quota
+	}
+	return nil
+}
+
+func (x *AvatarSnapshot) GetConstraints() *AvatarConstraints {
+	if x != nil {
+		return x.Constraints
+	}
+	return nil
+}
+
+// AvatarQuota 是一个用户在某个北京时间自然月里的头像更换额度。
+type AvatarQuota struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 额度所属月份，按北京时间（Asia/Shanghai）划分，格式 YYYY-MM。例："2026-11"
+	Month string `protobuf:"bytes,1,opt,name=month,proto3" json:"month,omitempty"`
+	// 这个月最多能成功更换几次头像，当前固定为 3；字段保留是为了以后调整上限时不用改协议。例：3
+	Limit int32 `protobuf:"varint,2,opt,name=limit,proto3" json:"limit,omitempty"`
+	// 这个月已经成功更换的次数，只统计 changed=true 的成功换图。例：1
+	Used int32 `protobuf:"varint,3,opt,name=used,proto3" json:"used,omitempty"`
+	// 这个月还剩几次，等于 limit - used，最小为 0。例：2
+	Remaining int32 `protobuf:"varint,4,opt,name=remaining,proto3" json:"remaining,omitempty"`
+	// 额度重置时间：下个月 1 日北京时间 0 点，也就是 month 的下一个自然月的起点。例：2026-12-01T00:00:00+08:00
+	ResetsAt      *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=resets_at,json=resetsAt,proto3" json:"resets_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AvatarQuota) Reset() {
+	*x = AvatarQuota{}
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AvatarQuota) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AvatarQuota) ProtoMessage() {}
+
+func (x *AvatarQuota) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AvatarQuota.ProtoReflect.Descriptor instead.
+func (*AvatarQuota) Descriptor() ([]byte, []int) {
+	return file_renice_sso_v1_sso_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *AvatarQuota) GetMonth() string {
+	if x != nil {
+		return x.Month
+	}
+	return ""
+}
+
+func (x *AvatarQuota) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+func (x *AvatarQuota) GetUsed() int32 {
+	if x != nil {
+		return x.Used
+	}
+	return 0
+}
+
+func (x *AvatarQuota) GetRemaining() int32 {
+	if x != nil {
+		return x.Remaining
+	}
+	return 0
+}
+
+func (x *AvatarQuota) GetResetsAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ResetsAt
+	}
+	return nil
+}
+
+// AvatarConstraints 是头像上传的硬限制，客户端可以据此先做本地校验。
+type AvatarConstraints struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 单次上传允许的最大字节数：5242880（5 MiB），按流式 chunk 累计计算，不是单条消息的大小。例：5242880
+	MaxBytes int64 `protobuf:"varint,1,opt,name=max_bytes,json=maxBytes,proto3" json:"max_bytes,omitempty"`
+	// 允许的图片格式，按内容嗅探判定，小写、不带点。例：["jpeg", "png", "gif", "webp"]
+	Formats []string `protobuf:"bytes,2,rep,name=formats,proto3" json:"formats,omitempty"`
+	// 是否允许动图（GIF、动态 WebP）。例：true
+	AnimationAllowed bool `protobuf:"varint,3,opt,name=animation_allowed,json=animationAllowed,proto3" json:"animation_allowed,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *AvatarConstraints) Reset() {
+	*x = AvatarConstraints{}
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AvatarConstraints) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AvatarConstraints) ProtoMessage() {}
+
+func (x *AvatarConstraints) ProtoReflect() protoreflect.Message {
+	mi := &file_renice_sso_v1_sso_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AvatarConstraints.ProtoReflect.Descriptor instead.
+func (*AvatarConstraints) Descriptor() ([]byte, []int) {
+	return file_renice_sso_v1_sso_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *AvatarConstraints) GetMaxBytes() int64 {
+	if x != nil {
+		return x.MaxBytes
+	}
+	return 0
+}
+
+func (x *AvatarConstraints) GetFormats() []string {
+	if x != nil {
+		return x.Formats
+	}
+	return nil
+}
+
+func (x *AvatarConstraints) GetAnimationAllowed() bool {
+	if x != nil {
+		return x.AnimationAllowed
+	}
+	return false
+}
+
 var File_renice_sso_v1_sso_proto protoreflect.FileDescriptor
 
 const file_renice_sso_v1_sso_proto_rawDesc = "" +
@@ -929,7 +1506,7 @@ const file_renice_sso_v1_sso_proto_rawDesc = "" +
 	"\x0esso_session_id\x18\x03 \x01(\tR\fssoSessionId\x1a>\n" +
 	"\x10PreferencesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xc5\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xec\x01\n" +
 	"\x04User\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x1a\n" +
 	"\busername\x18\x02 \x01(\tR\busername\x12!\n" +
@@ -938,7 +1515,8 @@ const file_renice_sso_v1_sso_proto_rawDesc = "" +
 	"\n" +
 	"avatar_url\x18\x05 \x01(\tR\tavatarUrl\x129\n" +
 	"\n" +
-	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"l\n" +
+	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12%\n" +
+	"\x0eavatar_version\x18\a \x01(\x03R\ravatarVersion\"l\n" +
 	"\x0fGrantAppRequest\x12\x1b\n" +
 	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12#\n" +
 	"\rclient_secret\x18\x02 \x01(\tR\fclientSecret\x12\x17\n" +
@@ -991,7 +1569,44 @@ const file_renice_sso_v1_sso_proto_rawDesc = "" +
 	"updated_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x1a>\n" +
 	"\x10PreferencesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x012\xb4\x04\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x97\x01\n" +
+	"\x14GetUserAvatarRequest\x12\x1b\n" +
+	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12#\n" +
+	"\rclient_secret\x18\x02 \x01(\tR\fclientSecret\x12\x17\n" +
+	"\auser_id\x18\x03 \x01(\x03R\x06userId\x12$\n" +
+	"\x0esso_session_id\x18\x04 \x01(\tR\fssoSessionId\"N\n" +
+	"\x15GetUserAvatarResponse\x125\n" +
+	"\x06avatar\x18\x01 \x01(\v2\x1d.renice.sso.v1.AvatarSnapshotR\x06avatar\"}\n" +
+	"\x17UploadUserAvatarRequest\x12?\n" +
+	"\x06header\x18\x01 \x01(\v2%.renice.sso.v1.UploadUserAvatarHeaderH\x00R\x06header\x12\x16\n" +
+	"\x05chunk\x18\x02 \x01(\fH\x00R\x05chunkB\t\n" +
+	"\apayload\"\xb8\x01\n" +
+	"\x16UploadUserAvatarHeader\x12\x1b\n" +
+	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12#\n" +
+	"\rclient_secret\x18\x02 \x01(\tR\fclientSecret\x12\x17\n" +
+	"\auser_id\x18\x03 \x01(\x03R\x06userId\x12$\n" +
+	"\x0esso_session_id\x18\x04 \x01(\tR\fssoSessionId\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x05 \x01(\tR\trequestId\"k\n" +
+	"\x18UploadUserAvatarResponse\x125\n" +
+	"\x06avatar\x18\x01 \x01(\v2\x1d.renice.sso.v1.AvatarSnapshotR\x06avatar\x12\x18\n" +
+	"\achanged\x18\x02 \x01(\bR\achanged\"\xcc\x01\n" +
+	"\x0eAvatarSnapshot\x12\x1d\n" +
+	"\n" +
+	"avatar_url\x18\x01 \x01(\tR\tavatarUrl\x12%\n" +
+	"\x0eavatar_version\x18\x02 \x01(\x03R\ravatarVersion\x120\n" +
+	"\x05quota\x18\x03 \x01(\v2\x1a.renice.sso.v1.AvatarQuotaR\x05quota\x12B\n" +
+	"\vconstraints\x18\x04 \x01(\v2 .renice.sso.v1.AvatarConstraintsR\vconstraints\"\xa4\x01\n" +
+	"\vAvatarQuota\x12\x14\n" +
+	"\x05month\x18\x01 \x01(\tR\x05month\x12\x14\n" +
+	"\x05limit\x18\x02 \x01(\x05R\x05limit\x12\x12\n" +
+	"\x04used\x18\x03 \x01(\x05R\x04used\x12\x1c\n" +
+	"\tremaining\x18\x04 \x01(\x05R\tremaining\x127\n" +
+	"\tresets_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\bresetsAt\"w\n" +
+	"\x11AvatarConstraints\x12\x1b\n" +
+	"\tmax_bytes\x18\x01 \x01(\x03R\bmaxBytes\x12\x18\n" +
+	"\aformats\x18\x02 \x03(\tR\aformats\x12+\n" +
+	"\x11animation_allowed\x18\x03 \x01(\bR\x10animationAllowed2\xf7\x05\n" +
 	"\n" +
 	"SSOService\x12W\n" +
 	"\fExchangeCode\x12\".renice.sso.v1.ExchangeCodeRequest\x1a#.renice.sso.v1.ExchangeCodeResponse\x12K\n" +
@@ -1000,7 +1615,9 @@ const file_renice_sso_v1_sso_proto_rawDesc = "" +
 	"\n" +
 	"ListGrants\x12 .renice.sso.v1.ListGrantsRequest\x1a!.renice.sso.v1.ListGrantsResponse\x12i\n" +
 	"\x12GetUserPreferences\x12(.renice.sso.v1.GetUserPreferencesRequest\x1a).renice.sso.v1.GetUserPreferencesResponse\x12r\n" +
-	"\x15UpdateUserPreferences\x12+.renice.sso.v1.UpdateUserPreferencesRequest\x1a,.renice.sso.v1.UpdateUserPreferencesResponseB\xb3\x01\n" +
+	"\x15UpdateUserPreferences\x12+.renice.sso.v1.UpdateUserPreferencesRequest\x1a,.renice.sso.v1.UpdateUserPreferencesResponse\x12Z\n" +
+	"\rGetUserAvatar\x12#.renice.sso.v1.GetUserAvatarRequest\x1a$.renice.sso.v1.GetUserAvatarResponse\x12e\n" +
+	"\x10UploadUserAvatar\x12&.renice.sso.v1.UploadUserAvatarRequest\x1a'.renice.sso.v1.UploadUserAvatarResponse(\x01B\xb3\x01\n" +
 	"\x11com.renice.sso.v1B\bSsoProtoP\x01Z>github.com/renice-project/renice-pb/gen/go/renice/sso/v1;ssov1\xa2\x02\x03RSX\xaa\x02\rRenice.Sso.V1\xca\x02\rRenice\\Sso\\V1\xe2\x02\x19Renice\\Sso\\V1\\GPBMetadata\xea\x02\x0fRenice::Sso::V1b\x06proto3"
 
 var (
@@ -1015,7 +1632,7 @@ func file_renice_sso_v1_sso_proto_rawDescGZIP() []byte {
 	return file_renice_sso_v1_sso_proto_rawDescData
 }
 
-var file_renice_sso_v1_sso_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
+var file_renice_sso_v1_sso_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
 var file_renice_sso_v1_sso_proto_goTypes = []any{
 	(*ExchangeCodeRequest)(nil),           // 0: renice.sso.v1.ExchangeCodeRequest
 	(*ExchangeCodeResponse)(nil),          // 1: renice.sso.v1.ExchangeCodeResponse
@@ -1031,41 +1648,59 @@ var file_renice_sso_v1_sso_proto_goTypes = []any{
 	(*GetUserPreferencesResponse)(nil),    // 11: renice.sso.v1.GetUserPreferencesResponse
 	(*UpdateUserPreferencesRequest)(nil),  // 12: renice.sso.v1.UpdateUserPreferencesRequest
 	(*UpdateUserPreferencesResponse)(nil), // 13: renice.sso.v1.UpdateUserPreferencesResponse
-	nil,                                   // 14: renice.sso.v1.ExchangeCodeResponse.PreferencesEntry
-	nil,                                   // 15: renice.sso.v1.GetUserPreferencesResponse.PreferencesEntry
-	nil,                                   // 16: renice.sso.v1.UpdateUserPreferencesRequest.PreferencesEntry
-	nil,                                   // 17: renice.sso.v1.UpdateUserPreferencesResponse.PreferencesEntry
-	(*timestamppb.Timestamp)(nil),         // 18: google.protobuf.Timestamp
+	(*GetUserAvatarRequest)(nil),          // 14: renice.sso.v1.GetUserAvatarRequest
+	(*GetUserAvatarResponse)(nil),         // 15: renice.sso.v1.GetUserAvatarResponse
+	(*UploadUserAvatarRequest)(nil),       // 16: renice.sso.v1.UploadUserAvatarRequest
+	(*UploadUserAvatarHeader)(nil),        // 17: renice.sso.v1.UploadUserAvatarHeader
+	(*UploadUserAvatarResponse)(nil),      // 18: renice.sso.v1.UploadUserAvatarResponse
+	(*AvatarSnapshot)(nil),                // 19: renice.sso.v1.AvatarSnapshot
+	(*AvatarQuota)(nil),                   // 20: renice.sso.v1.AvatarQuota
+	(*AvatarConstraints)(nil),             // 21: renice.sso.v1.AvatarConstraints
+	nil,                                   // 22: renice.sso.v1.ExchangeCodeResponse.PreferencesEntry
+	nil,                                   // 23: renice.sso.v1.GetUserPreferencesResponse.PreferencesEntry
+	nil,                                   // 24: renice.sso.v1.UpdateUserPreferencesRequest.PreferencesEntry
+	nil,                                   // 25: renice.sso.v1.UpdateUserPreferencesResponse.PreferencesEntry
+	(*timestamppb.Timestamp)(nil),         // 26: google.protobuf.Timestamp
 }
 var file_renice_sso_v1_sso_proto_depIdxs = []int32{
 	2,  // 0: renice.sso.v1.ExchangeCodeResponse.user:type_name -> renice.sso.v1.User
-	14, // 1: renice.sso.v1.ExchangeCodeResponse.preferences:type_name -> renice.sso.v1.ExchangeCodeResponse.PreferencesEntry
-	18, // 2: renice.sso.v1.User.created_at:type_name -> google.protobuf.Timestamp
-	18, // 3: renice.sso.v1.GrantAppResponse.granted_at:type_name -> google.protobuf.Timestamp
+	22, // 1: renice.sso.v1.ExchangeCodeResponse.preferences:type_name -> renice.sso.v1.ExchangeCodeResponse.PreferencesEntry
+	26, // 2: renice.sso.v1.User.created_at:type_name -> google.protobuf.Timestamp
+	26, // 3: renice.sso.v1.GrantAppResponse.granted_at:type_name -> google.protobuf.Timestamp
 	9,  // 4: renice.sso.v1.ListGrantsResponse.grants:type_name -> renice.sso.v1.Grant
-	18, // 5: renice.sso.v1.Grant.granted_at:type_name -> google.protobuf.Timestamp
-	15, // 6: renice.sso.v1.GetUserPreferencesResponse.preferences:type_name -> renice.sso.v1.GetUserPreferencesResponse.PreferencesEntry
-	18, // 7: renice.sso.v1.GetUserPreferencesResponse.updated_at:type_name -> google.protobuf.Timestamp
-	16, // 8: renice.sso.v1.UpdateUserPreferencesRequest.preferences:type_name -> renice.sso.v1.UpdateUserPreferencesRequest.PreferencesEntry
-	17, // 9: renice.sso.v1.UpdateUserPreferencesResponse.preferences:type_name -> renice.sso.v1.UpdateUserPreferencesResponse.PreferencesEntry
-	18, // 10: renice.sso.v1.UpdateUserPreferencesResponse.updated_at:type_name -> google.protobuf.Timestamp
-	0,  // 11: renice.sso.v1.SSOService.ExchangeCode:input_type -> renice.sso.v1.ExchangeCodeRequest
-	3,  // 12: renice.sso.v1.SSOService.GrantApp:input_type -> renice.sso.v1.GrantAppRequest
-	5,  // 13: renice.sso.v1.SSOService.RevokeApp:input_type -> renice.sso.v1.RevokeAppRequest
-	7,  // 14: renice.sso.v1.SSOService.ListGrants:input_type -> renice.sso.v1.ListGrantsRequest
-	10, // 15: renice.sso.v1.SSOService.GetUserPreferences:input_type -> renice.sso.v1.GetUserPreferencesRequest
-	12, // 16: renice.sso.v1.SSOService.UpdateUserPreferences:input_type -> renice.sso.v1.UpdateUserPreferencesRequest
-	1,  // 17: renice.sso.v1.SSOService.ExchangeCode:output_type -> renice.sso.v1.ExchangeCodeResponse
-	4,  // 18: renice.sso.v1.SSOService.GrantApp:output_type -> renice.sso.v1.GrantAppResponse
-	6,  // 19: renice.sso.v1.SSOService.RevokeApp:output_type -> renice.sso.v1.RevokeAppResponse
-	8,  // 20: renice.sso.v1.SSOService.ListGrants:output_type -> renice.sso.v1.ListGrantsResponse
-	11, // 21: renice.sso.v1.SSOService.GetUserPreferences:output_type -> renice.sso.v1.GetUserPreferencesResponse
-	13, // 22: renice.sso.v1.SSOService.UpdateUserPreferences:output_type -> renice.sso.v1.UpdateUserPreferencesResponse
-	17, // [17:23] is the sub-list for method output_type
-	11, // [11:17] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	26, // 5: renice.sso.v1.Grant.granted_at:type_name -> google.protobuf.Timestamp
+	23, // 6: renice.sso.v1.GetUserPreferencesResponse.preferences:type_name -> renice.sso.v1.GetUserPreferencesResponse.PreferencesEntry
+	26, // 7: renice.sso.v1.GetUserPreferencesResponse.updated_at:type_name -> google.protobuf.Timestamp
+	24, // 8: renice.sso.v1.UpdateUserPreferencesRequest.preferences:type_name -> renice.sso.v1.UpdateUserPreferencesRequest.PreferencesEntry
+	25, // 9: renice.sso.v1.UpdateUserPreferencesResponse.preferences:type_name -> renice.sso.v1.UpdateUserPreferencesResponse.PreferencesEntry
+	26, // 10: renice.sso.v1.UpdateUserPreferencesResponse.updated_at:type_name -> google.protobuf.Timestamp
+	19, // 11: renice.sso.v1.GetUserAvatarResponse.avatar:type_name -> renice.sso.v1.AvatarSnapshot
+	17, // 12: renice.sso.v1.UploadUserAvatarRequest.header:type_name -> renice.sso.v1.UploadUserAvatarHeader
+	19, // 13: renice.sso.v1.UploadUserAvatarResponse.avatar:type_name -> renice.sso.v1.AvatarSnapshot
+	20, // 14: renice.sso.v1.AvatarSnapshot.quota:type_name -> renice.sso.v1.AvatarQuota
+	21, // 15: renice.sso.v1.AvatarSnapshot.constraints:type_name -> renice.sso.v1.AvatarConstraints
+	26, // 16: renice.sso.v1.AvatarQuota.resets_at:type_name -> google.protobuf.Timestamp
+	0,  // 17: renice.sso.v1.SSOService.ExchangeCode:input_type -> renice.sso.v1.ExchangeCodeRequest
+	3,  // 18: renice.sso.v1.SSOService.GrantApp:input_type -> renice.sso.v1.GrantAppRequest
+	5,  // 19: renice.sso.v1.SSOService.RevokeApp:input_type -> renice.sso.v1.RevokeAppRequest
+	7,  // 20: renice.sso.v1.SSOService.ListGrants:input_type -> renice.sso.v1.ListGrantsRequest
+	10, // 21: renice.sso.v1.SSOService.GetUserPreferences:input_type -> renice.sso.v1.GetUserPreferencesRequest
+	12, // 22: renice.sso.v1.SSOService.UpdateUserPreferences:input_type -> renice.sso.v1.UpdateUserPreferencesRequest
+	14, // 23: renice.sso.v1.SSOService.GetUserAvatar:input_type -> renice.sso.v1.GetUserAvatarRequest
+	16, // 24: renice.sso.v1.SSOService.UploadUserAvatar:input_type -> renice.sso.v1.UploadUserAvatarRequest
+	1,  // 25: renice.sso.v1.SSOService.ExchangeCode:output_type -> renice.sso.v1.ExchangeCodeResponse
+	4,  // 26: renice.sso.v1.SSOService.GrantApp:output_type -> renice.sso.v1.GrantAppResponse
+	6,  // 27: renice.sso.v1.SSOService.RevokeApp:output_type -> renice.sso.v1.RevokeAppResponse
+	8,  // 28: renice.sso.v1.SSOService.ListGrants:output_type -> renice.sso.v1.ListGrantsResponse
+	11, // 29: renice.sso.v1.SSOService.GetUserPreferences:output_type -> renice.sso.v1.GetUserPreferencesResponse
+	13, // 30: renice.sso.v1.SSOService.UpdateUserPreferences:output_type -> renice.sso.v1.UpdateUserPreferencesResponse
+	15, // 31: renice.sso.v1.SSOService.GetUserAvatar:output_type -> renice.sso.v1.GetUserAvatarResponse
+	18, // 32: renice.sso.v1.SSOService.UploadUserAvatar:output_type -> renice.sso.v1.UploadUserAvatarResponse
+	25, // [25:33] is the sub-list for method output_type
+	17, // [17:25] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_renice_sso_v1_sso_proto_init() }
@@ -1073,13 +1708,17 @@ func file_renice_sso_v1_sso_proto_init() {
 	if File_renice_sso_v1_sso_proto != nil {
 		return
 	}
+	file_renice_sso_v1_sso_proto_msgTypes[16].OneofWrappers = []any{
+		(*UploadUserAvatarRequest_Header)(nil),
+		(*UploadUserAvatarRequest_Chunk)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_renice_sso_v1_sso_proto_rawDesc), len(file_renice_sso_v1_sso_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   18,
+			NumMessages:   26,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

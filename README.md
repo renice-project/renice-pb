@@ -6,7 +6,7 @@ renice 系列服务之间的 gRPC 契约：`.proto` 加上生成好的 Go 代码
 
 | 服务 | 包 | 说明 |
 |---|---|---|
-| renice-sso | `renice.sso.v1` | `SSOService.ExchangeCode`：各服务后端用登录回调里的一次性 code 换出用户身份；`GrantApp` / `RevokeApp` / `ListGrants`：服务告诉 SSO 谁能在启动台看到自己 |
+| renice-sso | `renice.sso.v1` | `SSOService.ExchangeCode`：各服务后端用登录回调里的一次性 code 换出用户身份；`GrantApp` / `RevokeApp` / `ListGrants`：服务告诉 SSO 谁能在启动台看到自己；`GetUserAvatar` / `UploadUserAvatar`：读取头像快照与月度额度、流式上传头像（所有子服务共享每月 3 次） |
 
 ## 怎么用
 

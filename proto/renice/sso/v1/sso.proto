@@ -100,6 +100,95 @@ service SSOService {
   // 业务例子：用户在 renice-oj 侧栏点月亮图标切换到夜间模式，renice-oj 后端收到 PATCH 后调
   // UpdateUserPreferences(user_id=10001, preferences={"theme_mode": "dark"}) 推回 SSO。
   rpc UpdateUserPreferences(UpdateUserPreferencesRequest) returns (UpdateUserPreferencesResponse);
+
+  // GetUserAvatar 读取用户的当前头像快照和本自然月的上传额度，给各服务后端展示头像、或者打开上传面板前调用。
+  //
+  // 只允许受信服务的后端调用：client_id / client_secret 必须有效，sso_session_id 必须是该用户当前存活的来源 SSO 会话，
+  // 且会话记录里的 uid 与 user_id 一致。sso_session_id 只是会话关联 ID，不是 bearer 凭证，不能单独证明身份；
+  // 凭据、用户 active、来源会话存在且 UID 匹配，四者都对才返回本人额度。
+  //
+  // 错误码：
+  //
+  // 1. client_id 不存在、客户端已停用、client_secret 不对，或者 sso_session_id 为空 / 不存在 / 已过期 / 会话里的 uid 与 user_id 不一致 → UNAUTHENTICATED。
+  // 2. user_id 不是正数 → INVALID_ARGUMENT。
+  // 3. 用户不存在 → NOT_FOUND。
+  // 4. 用户已在 SSO 被停用 → PERMISSION_DENIED「账号已停用」。
+  // 5. 存储暂时不可用 → UNAVAILABLE；其他服务端错误 → INTERNAL。
+  //
+  // 业务例子：ice 打开 renice-oj 的个人主页，renice-oj 后端带着 ice 的会话调
+  // GetUserAvatar(user_id=10001, sso_session_id="3f8a1c9e2b7d4f60a1b2c3d4")，拿到头像地址和本月还剩 2 次的上传额度。
+  rpc GetUserAvatar(GetUserAvatarRequest) returns (GetUserAvatarResponse);
+
+  // UploadUserAvatar 上传并替换用户头像，客户端流式发送。
+  //
+  // 传输形状（不是单个 5 MiB 的 unary 消息）：
+  //
+  // 1. 第一条消息必须是 oneof header（UploadUserAvatarHeader），整个流里只能有一条 header；
+  //    第一条不是 header、出现第二条 header、header 之后一块 chunk 都没有 → INVALID_ARGUMENT。
+  // 2. header 之后的消息只能带 chunk，每块建议不超过 65536 字节（64 KiB），累计不超过 5242880 字节（5 MiB）。
+  //    5 MiB 按 64 KiB 分块是 80 块，所以协议必须是流式的。
+  // 3. 鉴权分两次，第一次在接收文件数据之前完成；任一项不过就立即返回并结束流，不会把 chunk 收完再拒：
+  //    a. 收到第一条 header 后、读取第一块 chunk 之前，依次校验：
+  //       - client_id 不存在、客户端已停用、client_secret 不对 → UNAUTHENTICATED；
+  //       - user_id 不是正数、request_id 为空 → INVALID_ARGUMENT；
+  //       - 用户不存在 → NOT_FOUND；用户已停用 → PERMISSION_DENIED「账号已停用」；
+  //       - sso_session_id 为空、会话记录不存在 / 已过期，或记录里的 uid 与 user_id 不一致 → UNAUTHENTICATED。
+  //    b. 提交前（写存储、换版本、扣额度之前）再验一次用户状态和来源会话：传输途中用户被停用、会话过期或登出，
+  //       按与 a 相同的错误码拒绝，本次不产生新版本、不扣额度。
+  //    这个先后顺序是可观测的契约：无效 header 必须在读到第一块 chunk 之前就失败，SSO 实现的测试可以据此断言。
+  // 4. 图片格式由服务端按内容嗅探判定，只接受 JPEG / PNG / GIF / WebP（GIF、动态 WebP 允许），
+  //    不信任浏览器声明的 MIME，也不看原始文件名。
+  //
+  // 额度与幂等（所有子服务共享同一份额度，不按 client_id 分开计数）：
+  //
+  // 1. 每个用户每个北京时间自然月最多成功更换 3 次头像。取消、失败、上传的图和当前头像完全相同、
+  //    同一次请求的重试都不扣次数；只有真正换成了新图（changed=true）才扣一次。
+  // 2. request_id 由调用方生成，幂等作用域是 (user_id, request_id)，跨 client 生效：同一用户下不同服务复用
+  //    同一个 request_id 会被当成同一次上传。重试请复用原 request_id 和同一份文件。
+  // 3. 同一个 request_id 重复提交相同内容 → 成功，changed=false，返回当前快照，不扣次数；
+  //    同一个 request_id 提交不同内容 → ALREADY_EXISTS。
+  // 4. 并发只剩 1 次额度时，最多只有一个新内容上传能成功，其余请求 RESOURCE_EXHAUSTED，不会超扣。
+  //
+  // 错误码：
+  //
+  // 1. client_id 不存在、客户端已停用、client_secret 不对，或者 sso_session_id 为空 / 不存在 / 已过期 / 会话里的 uid 与 user_id 不一致 → UNAUTHENTICATED。
+  // 2. user_id 不是正数、缺少 header、header 不是第一条、重复 header、request_id 为空、累计 chunk 为 0 → INVALID_ARGUMENT。
+  // 3. 用户不存在 → NOT_FOUND；用户已停用 → PERMISSION_DENIED「账号已停用」。
+  // 4. 图片内容不是允许的格式、解码失败、尺寸不合法 → INVALID_ARGUMENT。
+  // 5. 文件累计超过 5242880 字节 → RESOURCE_EXHAUSTED，reason="AVATAR_TOO_LARGE"；
+  //    本月 3 次额度已用完 → RESOURCE_EXHAUSTED，reason="AVATAR_QUOTA_EXHAUSTED"。
+  //    这两种都在 details 里带一条 google.rpc.ErrorInfo，domain 都是 "renice.sso"，metadata 的键和编码规则固定如下，
+  //    SSO 与所有调用方必须按同一套实现，不能各自发挥：
+  //
+  //    a. metadata 里本次错误只放一个键，键名固定、大小写敏感：额度用尽 → "quota"，放当前 AvatarQuota；
+  //       文件过大 → "constraints"，放当前 AvatarConstraints。不要换成 quota_json 之类的别名，也不要把两个键都塞进去，
+  //       更不能把两种消息配错键。
+  //    b. metadata 的值必须是对应消息的 ProtoJSON 文本，生成端固定用 google.golang.org/protobuf/encoding/protojson 的
+  //       MarshalOptions{EmitUnpopulated: true}：字段名用 lowerCamelCase（resetsAt、maxBytes），
+  //       google.protobuf.Timestamp 编成 RFC 3339 的 UTC 字符串（"2026-11-30T16:00:00Z"，不是 {"seconds":1796054400} 这种对象），
+  //       int64 编成 JSON 字符串（maxBytes 是 "5242880"），int32 编成 JSON 数字，
+  //       零值也显式输出（额度用完时 remaining 必须是 0，不能省略）。
+  //    c. 消费端直接用 protojson.Unmarshal 把 metadata 的值解析回 AvatarQuota / AvatarConstraints，不要先转成 map[string]any 再手拼；
+  //       不认识的 metadata 键忽略，本次错误对应的键缺失时按对应消息的默认值兜底，但不要把错误本身吞掉。
+  //    d. 不要用 encoding/json 直接序列化生成的 Go 类型：它按 Go 结构体出键（resets_at）、把 Timestamp 编成 {"seconds":1796054400}，
+  //       还会因为 omitempty 省略 remaining，这样的值消费端 protojson.Unmarshal 会报 unexpected token {。
+  //
+  //    额度用尽的完整例子（details 里只有这一条 ErrorInfo，等号右边就是 metadata 字符串的完整内容）：
+  //      reason = "AVATAR_QUOTA_EXHAUSTED"
+  //      domain = "renice.sso"
+  //      metadata["quota"] = {"month":"2026-11","limit":3,"used":3,"remaining":0,"resetsAt":"2026-11-30T16:00:00Z"}
+  //    文件过大的完整例子：
+  //      reason = "AVATAR_TOO_LARGE"
+  //      domain = "renice.sso"
+  //      metadata["constraints"] = {"maxBytes":"5242880","formats":["jpeg","png","gif","webp"],"animationAllowed":true}
+  //    上面的两段 metadata 值都能用 protojson.Unmarshal 原样解析回对应消息，生成端照着拼即可。
+  // 6. 同一 (user_id, request_id) 已提交过不同内容 → ALREADY_EXISTS。
+  // 7. 存储写失败 → INTERNAL；存储暂时不可用 → UNAVAILABLE。
+  //
+  // 业务例子：用户在 renice-infra 设置页选了一张 1.2 MB 的 WebP 动图，renice-infra 后端先发 header
+  // （client_id="renice-infra"、user_id=10001、request_id="a1b2c3d4"），再按 64 KiB 发 20 块 chunk，
+  // 拿到 changed=true 和新版本号 8，本月额度从 3 变成 2。
+  rpc UploadUserAvatar(stream UploadUserAvatarRequest) returns (UploadUserAvatarResponse);
 }
 
 // ExchangeCodeRequest 是 ExchangeCode 的入参。
@@ -142,6 +231,9 @@ message User {
   string avatar_url = 5;
   // 在 SSO 注册的时间。例：2026-10-16T15:14:18+08:00
   google.protobuf.Timestamp created_at = 6;
+  // 头像版本号，和 AvatarSnapshot.avatar_version 同源：换一次新头像加一，没有头像时为 0。
+  // 换码顺带返回它，调用方拼头像地址时不用再调一次 GetUserAvatar。例：7
+  int64 avatar_version = 7;
 }
 
 // GrantAppRequest 是 GrantApp 的入参。
@@ -242,4 +334,96 @@ message UpdateUserPreferencesResponse {
   map<string, string> preferences = 1;
   // 本次更新后该用户偏好记录的最新修改时间（每次成功调用 UpdateUserPreferences 都会持久化传入键值并刷新时间，始终非空）。例：2026-11-06T11:30:00+08:00
   google.protobuf.Timestamp updated_at = 2;
+}
+
+// GetUserAvatarRequest 是 GetUserAvatar 的入参。
+message GetUserAvatarRequest {
+  // 调用方在 SSO 登记的客户端 ID。例："renice-oj"
+  string client_id = 1;
+  // 客户端密钥，只放在服务器的 .env 里。例："（见服务器 .env 的 APP_SSO_CLIENT_SECRET）"
+  string client_secret = 2;
+  // 要读取头像的用户在 SSO 里的 ID，必须和 sso_session_id 会话记录里的 uid 一致。例：10001
+  int64 user_id = 3;
+  // 这个用户的来源 SSO 会话 ID，和 ExchangeCodeResponse.sso_session_id 是同一个值。
+  // 它不是 bearer 凭证，只用来确认这次读取依附的会话仍然存活且属于 user_id。例："3f8a1c9e2b7d4f60a1b2c3d4"
+  string sso_session_id = 4;
+}
+
+// GetUserAvatarResponse 是 GetUserAvatar 的出参。
+message GetUserAvatarResponse {
+  // 用户当前的头像快照，连同本月额度和上传限制。例：{avatar_url: "https://renice.cc/api/v1/avatars/10001?v=7", avatar_version: 7, quota: {...}, constraints: {...}}
+  AvatarSnapshot avatar = 1;
+}
+
+// UploadUserAvatarRequest 是 UploadUserAvatar 客户端流里的一条消息：第一条是 header，之后全是 chunk。
+message UploadUserAvatarRequest {
+  // 流里的负载，要么是唯一的 header，要么是一块文件字节，二者只能出现一个。
+  oneof payload {
+    // 上传头，必须是流的第一条消息，整个流只能有一条。例：{client_id: "renice-infra", user_id: 10001, request_id: "a1b2c3d4"}
+    UploadUserAvatarHeader header = 1;
+    // 文件内容的一块，建议不超过 65536 字节；累计上限 5242880 字节，5 MiB 按 64 KiB 算就是 80 块。例：b"\x89PNG\r\n\x1a\n..."
+    bytes chunk = 2;
+  }
+}
+
+// UploadUserAvatarHeader 是 UploadUserAvatar 流的第一条、也是唯一一条 header 消息，带着这次上传的身份和幂等键。
+message UploadUserAvatarHeader {
+  // 调用方在 SSO 登记的客户端 ID。例："renice-infra"
+  string client_id = 1;
+  // 客户端密钥，只放在服务器的 .env 里。例："（见服务器 .env 的 APP_SSO_CLIENT_SECRET）"
+  string client_secret = 2;
+  // 要更换头像的用户在 SSO 里的 ID。例：10001
+  int64 user_id = 3;
+  // 这个用户的来源 SSO 会话 ID，和 ExchangeCodeResponse.sso_session_id 是同一个值。
+  // 它不是 bearer 凭证，只用来确认这次上传依附的会话仍然存活且属于 user_id。例："3f8a1c9e2b7d4f60a1b2c3d4"
+  string sso_session_id = 4;
+  // 调用方生成的幂等键，作用域是 (user_id, request_id) 且跨 client 生效；重试必须复用同一个值。例："a1b2c3d4-upload-20261125"
+  string request_id = 5;
+}
+
+// UploadUserAvatarResponse 是 UploadUserAvatar 的出参。
+message UploadUserAvatarResponse {
+  // 上传完成后的头像快照，换图成功或同图重试都返回当前值。例：{avatar_url: "https://renice.cc/api/v1/avatars/10001?v=8", avatar_version: 8, quota: {...}, constraints: {...}}
+  AvatarSnapshot avatar = 1;
+  // 这次是否真的换成了新头像：换了为 true 并扣一次额度；上传的图和当前头像完全相同、或同一次请求的重试为 false，不扣次数。例：true
+  bool changed = 2;
+}
+
+// AvatarSnapshot 是一个用户当前头像的只读快照，连同这个月的上传额度和上传限制一起返回。
+message AvatarSnapshot {
+  // 头像的绝对地址，格式固定为 <SSO 环境地址>/api/v1/avatars/{uid}?v={avatar_version}。
+  // 这是「稳定当前头像」地址，不承诺 immutable：同一个 v 下服务端可能修复重新生成，客户端按 Cache-Control 缓存即可；
+  // 换头像后 v 会变，地址随之变化，可以放心用 ?v= 破缓存。没有头像时返回统一默认图，avatar_version 为 0，地址同样稳定。
+  // 例："https://renice.cc/api/v1/avatars/10001?v=7"
+  string avatar_url = 1;
+  // 单用户单调递增的头像版本号，换一次新图加一，和 User.avatar_version 同源；没有头像时为 0。例：7
+  int64 avatar_version = 2;
+  // 该用户本自然月的上传额度（所有子服务共享）。例：{month: "2026-11", limit: 3, used: 1, remaining: 2, resets_at: 2026-12-01T00:00:00+08:00}
+  AvatarQuota quota = 3;
+  // 上传限制，客户端可以据此在选图后先本地预检，避免白传。例：{max_bytes: 5242880, formats: ["jpeg", "png", "gif", "webp"], animation_allowed: true}
+  AvatarConstraints constraints = 4;
+}
+
+// AvatarQuota 是一个用户在某个北京时间自然月里的头像更换额度。
+message AvatarQuota {
+  // 额度所属月份，按北京时间（Asia/Shanghai）划分，格式 YYYY-MM。例："2026-11"
+  string month = 1;
+  // 这个月最多能成功更换几次头像，当前固定为 3；字段保留是为了以后调整上限时不用改协议。例：3
+  int32 limit = 2;
+  // 这个月已经成功更换的次数，只统计 changed=true 的成功换图。例：1
+  int32 used = 3;
+  // 这个月还剩几次，等于 limit - used，最小为 0。例：2
+  int32 remaining = 4;
+  // 额度重置时间：下个月 1 日北京时间 0 点，也就是 month 的下一个自然月的起点。例：2026-12-01T00:00:00+08:00
+  google.protobuf.Timestamp resets_at = 5;
+}
+
+// AvatarConstraints 是头像上传的硬限制，客户端可以据此先做本地校验。
+message AvatarConstraints {
+  // 单次上传允许的最大字节数：5242880（5 MiB），按流式 chunk 累计计算，不是单条消息的大小。例：5242880
+  int64 max_bytes = 1;
+  // 允许的图片格式，按内容嗅探判定，小写、不带点。例：["jpeg", "png", "gif", "webp"]
+  repeated string formats = 2;
+  // 是否允许动图（GIF、动态 WebP）。例：true
+  bool animation_allowed = 3;
 }
