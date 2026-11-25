@@ -4,6 +4,8 @@
 
 ## 未发布
 
+- 新增 `renice.sso.v1.SSOService.GetUserAvatar` / `UploadUserAvatar`（客户端流）与 `AvatarSnapshot` / `AvatarQuota` / `AvatarConstraints` 等消息，并在 `User` 追加 `avatar_version`：SSO 集中管理头像，JPEG / PNG / GIF / WebP（含动图），单文件不超过 5242880 字节，每个用户每个北京时间自然月 3 次、所有子服务共享；取消、失败、同图以及同 `request_id` 重试不扣次数。`GetUserAvatar` 用客户端凭据加来源 SSO 会话确认本人后返回额度；`UploadUserAvatar` 第一条消息是 header（含 `request_id`），之后按建议 64 KiB 分块，5 MiB 即 80 块，不是单个 5 MiB 的 unary 消息。背景：OJ / infra / template 等子服务不再各自维护头像，统一由 SSO 提供稳定地址 `/api/v1/avatars/{uid}?v={version}`（2026-11-25 ice 定）。
+
 - `ExchangeCodeResponse` 增加 `sso_session_id`：来源 SSO 会话的关联 ID，调用方绑定进自己签的 AT / RT，之后按公开的共享 Redis 会话契约（`<session_key_prefix>:<sso_sid>`，值是规范十进制正整数 uid）只读验活，SSO 登出即失效；各服务仍自签 AT/RT，不新增逐请求验活 RPC，也不额外暴露 key 名、RT hash 或 token。同时更正 `ExchangeCode` 注释里「SSO 不参与调用方后续的会话」的说法。背景：子系统原来只认自己签的 AT/RT，SSO 退出并换号后仍能用旧会话继续访问（2026-11-11 ice 定）。
 
 - 新增 `renice.sso.v1.SSOService.GetUserPreferences` / `UpdateUserPreferences`，并在 `ExchangeCodeResponse` 中增加 `preferences` 字段，用键值表（`map<string, string>`）读写跨服务统一偏好设置（第一期支持外观 `theme_mode` 与 `dark_ink`，后续新增键无需改动 proto）。背景：各子服务需要统一同步日夜模式与夜间字色预设，并支持动态扩容新设置项（2026-11-06 ice 定）。

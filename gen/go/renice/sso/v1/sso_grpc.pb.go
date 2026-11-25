@@ -25,6 +25,8 @@ const (
 	SSOService_ListGrants_FullMethodName            = "/renice.sso.v1.SSOService/ListGrants"
 	SSOService_GetUserPreferences_FullMethodName    = "/renice.sso.v1.SSOService/GetUserPreferences"
 	SSOService_UpdateUserPreferences_FullMethodName = "/renice.sso.v1.SSOService/UpdateUserPreferences"
+	SSOService_GetUserAvatar_FullMethodName         = "/renice.sso.v1.SSOService/GetUserAvatar"
+	SSOService_UploadUserAvatar_FullMethodName      = "/renice.sso.v1.SSOService/UploadUserAvatar"
 )
 
 // SSOServiceClient is the client API for SSOService service.
@@ -122,6 +124,62 @@ type SSOServiceClient interface {
 	// 业务例子：用户在 renice-oj 侧栏点月亮图标切换到夜间模式，renice-oj 后端收到 PATCH 后调
 	// UpdateUserPreferences(user_id=10001, preferences={"theme_mode": "dark"}) 推回 SSO。
 	UpdateUserPreferences(ctx context.Context, in *UpdateUserPreferencesRequest, opts ...grpc.CallOption) (*UpdateUserPreferencesResponse, error)
+	// GetUserAvatar 读取用户的当前头像快照和本自然月的上传额度，给各服务后端展示头像、或者打开上传面板前调用。
+	//
+	// 只允许受信服务的后端调用：client_id / client_secret 必须有效，sso_session_id 必须是该用户当前存活的来源 SSO 会话，
+	// 且会话记录里的 uid 与 user_id 一致。sso_session_id 只是会话关联 ID，不是 bearer 凭证，不能单独证明身份；
+	// 凭据、用户 active、来源会话存在且 UID 匹配，四者都对才返回本人额度。
+	//
+	// 错误码：
+	//
+	// 1. client_id 不存在、客户端已停用、client_secret 不对，或者 sso_session_id 为空 / 不存在 / 已过期 / 会话里的 uid 与 user_id 不一致 → UNAUTHENTICATED。
+	// 2. user_id 不是正数 → INVALID_ARGUMENT。
+	// 3. 用户不存在 → NOT_FOUND。
+	// 4. 用户已在 SSO 被停用 → PERMISSION_DENIED「账号已停用」。
+	// 5. 存储暂时不可用 → UNAVAILABLE；其他服务端错误 → INTERNAL。
+	//
+	// 业务例子：ice 打开 renice-oj 的个人主页，renice-oj 后端带着 ice 的会话调
+	// GetUserAvatar(user_id=10001, sso_session_id="3f8a1c9e2b7d4f60a1b2c3d4")，拿到头像地址和本月还剩 2 次的上传额度。
+	GetUserAvatar(ctx context.Context, in *GetUserAvatarRequest, opts ...grpc.CallOption) (*GetUserAvatarResponse, error)
+	// UploadUserAvatar 上传并替换用户头像，客户端流式发送。
+	//
+	// 传输形状（不是单个 5 MiB 的 unary 消息）：
+	//
+	// 1. 第一条消息必须是 oneof header（UploadUserAvatarHeader），整个流里只能有一条 header；
+	//    第一条不是 header、出现第二条 header、header 之后一块 chunk 都没有 → INVALID_ARGUMENT。
+	// 2. header 之后的消息只能带 chunk，每块建议不超过 65536 字节（64 KiB），累计不超过 5242880 字节（5 MiB）。
+	//    5 MiB 按 64 KiB 分块是 80 块，所以协议必须是流式的。
+	// 3. 服务端在接收第一块文件数据之前先校验 header 里的客户端凭据，凭据不对立即 UNAUTHENTICATED，不会先收完再拒；
+	//    提交前再验一次用户状态和来源会话，会话在传输途中失效同样拒绝。
+	// 4. 图片格式由服务端按内容嗅探判定，只接受 JPEG / PNG / GIF / WebP（GIF、动态 WebP 允许），
+	//    不信任浏览器声明的 MIME，也不看原始文件名。
+	//
+	// 额度与幂等（所有子服务共享同一份额度，不按 client_id 分开计数）：
+	//
+	// 1. 每个用户每个北京时间自然月最多成功更换 3 次头像。取消、失败、上传的图和当前头像完全相同、
+	//    同一次请求的重试都不扣次数；只有真正换成了新图（changed=true）才扣一次。
+	// 2. request_id 由调用方生成，幂等作用域是 (user_id, request_id)，跨 client 生效：同一用户下不同服务复用
+	//    同一个 request_id 会被当成同一次上传。重试请复用原 request_id 和同一份文件。
+	// 3. 同一个 request_id 重复提交相同内容 → 成功，changed=false，返回当前快照，不扣次数；
+	//    同一个 request_id 提交不同内容 → ALREADY_EXISTS。
+	// 4. 并发只剩 1 次额度时，最多只有一个新内容上传能成功，其余请求 RESOURCE_EXHAUSTED，不会超扣。
+	//
+	// 错误码：
+	//
+	// 1. client_id 不存在、客户端已停用、client_secret 不对，或者 sso_session_id 为空 / 不存在 / 已过期 / 会话里的 uid 与 user_id 不一致 → UNAUTHENTICATED。
+	// 2. user_id 不是正数、缺少 header、header 不是第一条、重复 header、request_id 为空、累计 chunk 为 0 → INVALID_ARGUMENT。
+	// 3. 用户不存在 → NOT_FOUND；用户已停用 → PERMISSION_DENIED「账号已停用」。
+	// 4. 图片内容不是允许的格式、解码失败、尺寸不合法 → INVALID_ARGUMENT。
+	// 5. 文件累计超过 5242880 字节 → RESOURCE_EXHAUSTED，details 带 google.rpc.ErrorInfo，reason="AVATAR_TOO_LARGE"，
+	//    metadata 里放当前 AvatarConstraints 的 JSON；本月 3 次额度已用完 → RESOURCE_EXHAUSTED，reason="AVATAR_QUOTA_EXHAUSTED"，
+	//    metadata 里放当前 AvatarQuota 的 JSON（remaining 为 0）。
+	// 6. 同一 (user_id, request_id) 已提交过不同内容 → ALREADY_EXISTS。
+	// 7. 存储写失败 → INTERNAL；存储暂时不可用 → UNAVAILABLE。
+	//
+	// 业务例子：用户在 renice-infra 设置页选了一张 1.2 MB 的 WebP 动图，renice-infra 后端先发 header
+	// （client_id="renice-infra"、user_id=10001、request_id="a1b2c3d4"），再按 64 KiB 发 20 块 chunk，
+	// 拿到 changed=true 和新版本号 8，本月额度从 3 变成 2。
+	UploadUserAvatar(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[UploadUserAvatarRequest, UploadUserAvatarResponse], error)
 }
 
 type sSOServiceClient struct {
@@ -191,6 +249,29 @@ func (c *sSOServiceClient) UpdateUserPreferences(ctx context.Context, in *Update
 	}
 	return out, nil
 }
+
+func (c *sSOServiceClient) GetUserAvatar(ctx context.Context, in *GetUserAvatarRequest, opts ...grpc.CallOption) (*GetUserAvatarResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetUserAvatarResponse)
+	err := c.cc.Invoke(ctx, SSOService_GetUserAvatar_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sSOServiceClient) UploadUserAvatar(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[UploadUserAvatarRequest, UploadUserAvatarResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &SSOService_ServiceDesc.Streams[0], SSOService_UploadUserAvatar_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[UploadUserAvatarRequest, UploadUserAvatarResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type SSOService_UploadUserAvatarClient = grpc.ClientStreamingClient[UploadUserAvatarRequest, UploadUserAvatarResponse]
 
 // SSOServiceServer is the server API for SSOService service.
 // All implementations must embed UnimplementedSSOServiceServer
@@ -287,6 +368,62 @@ type SSOServiceServer interface {
 	// 业务例子：用户在 renice-oj 侧栏点月亮图标切换到夜间模式，renice-oj 后端收到 PATCH 后调
 	// UpdateUserPreferences(user_id=10001, preferences={"theme_mode": "dark"}) 推回 SSO。
 	UpdateUserPreferences(context.Context, *UpdateUserPreferencesRequest) (*UpdateUserPreferencesResponse, error)
+	// GetUserAvatar 读取用户的当前头像快照和本自然月的上传额度，给各服务后端展示头像、或者打开上传面板前调用。
+	//
+	// 只允许受信服务的后端调用：client_id / client_secret 必须有效，sso_session_id 必须是该用户当前存活的来源 SSO 会话，
+	// 且会话记录里的 uid 与 user_id 一致。sso_session_id 只是会话关联 ID，不是 bearer 凭证，不能单独证明身份；
+	// 凭据、用户 active、来源会话存在且 UID 匹配，四者都对才返回本人额度。
+	//
+	// 错误码：
+	//
+	// 1. client_id 不存在、客户端已停用、client_secret 不对，或者 sso_session_id 为空 / 不存在 / 已过期 / 会话里的 uid 与 user_id 不一致 → UNAUTHENTICATED。
+	// 2. user_id 不是正数 → INVALID_ARGUMENT。
+	// 3. 用户不存在 → NOT_FOUND。
+	// 4. 用户已在 SSO 被停用 → PERMISSION_DENIED「账号已停用」。
+	// 5. 存储暂时不可用 → UNAVAILABLE；其他服务端错误 → INTERNAL。
+	//
+	// 业务例子：ice 打开 renice-oj 的个人主页，renice-oj 后端带着 ice 的会话调
+	// GetUserAvatar(user_id=10001, sso_session_id="3f8a1c9e2b7d4f60a1b2c3d4")，拿到头像地址和本月还剩 2 次的上传额度。
+	GetUserAvatar(context.Context, *GetUserAvatarRequest) (*GetUserAvatarResponse, error)
+	// UploadUserAvatar 上传并替换用户头像，客户端流式发送。
+	//
+	// 传输形状（不是单个 5 MiB 的 unary 消息）：
+	//
+	// 1. 第一条消息必须是 oneof header（UploadUserAvatarHeader），整个流里只能有一条 header；
+	//    第一条不是 header、出现第二条 header、header 之后一块 chunk 都没有 → INVALID_ARGUMENT。
+	// 2. header 之后的消息只能带 chunk，每块建议不超过 65536 字节（64 KiB），累计不超过 5242880 字节（5 MiB）。
+	//    5 MiB 按 64 KiB 分块是 80 块，所以协议必须是流式的。
+	// 3. 服务端在接收第一块文件数据之前先校验 header 里的客户端凭据，凭据不对立即 UNAUTHENTICATED，不会先收完再拒；
+	//    提交前再验一次用户状态和来源会话，会话在传输途中失效同样拒绝。
+	// 4. 图片格式由服务端按内容嗅探判定，只接受 JPEG / PNG / GIF / WebP（GIF、动态 WebP 允许），
+	//    不信任浏览器声明的 MIME，也不看原始文件名。
+	//
+	// 额度与幂等（所有子服务共享同一份额度，不按 client_id 分开计数）：
+	//
+	// 1. 每个用户每个北京时间自然月最多成功更换 3 次头像。取消、失败、上传的图和当前头像完全相同、
+	//    同一次请求的重试都不扣次数；只有真正换成了新图（changed=true）才扣一次。
+	// 2. request_id 由调用方生成，幂等作用域是 (user_id, request_id)，跨 client 生效：同一用户下不同服务复用
+	//    同一个 request_id 会被当成同一次上传。重试请复用原 request_id 和同一份文件。
+	// 3. 同一个 request_id 重复提交相同内容 → 成功，changed=false，返回当前快照，不扣次数；
+	//    同一个 request_id 提交不同内容 → ALREADY_EXISTS。
+	// 4. 并发只剩 1 次额度时，最多只有一个新内容上传能成功，其余请求 RESOURCE_EXHAUSTED，不会超扣。
+	//
+	// 错误码：
+	//
+	// 1. client_id 不存在、客户端已停用、client_secret 不对，或者 sso_session_id 为空 / 不存在 / 已过期 / 会话里的 uid 与 user_id 不一致 → UNAUTHENTICATED。
+	// 2. user_id 不是正数、缺少 header、header 不是第一条、重复 header、request_id 为空、累计 chunk 为 0 → INVALID_ARGUMENT。
+	// 3. 用户不存在 → NOT_FOUND；用户已停用 → PERMISSION_DENIED「账号已停用」。
+	// 4. 图片内容不是允许的格式、解码失败、尺寸不合法 → INVALID_ARGUMENT。
+	// 5. 文件累计超过 5242880 字节 → RESOURCE_EXHAUSTED，details 带 google.rpc.ErrorInfo，reason="AVATAR_TOO_LARGE"，
+	//    metadata 里放当前 AvatarConstraints 的 JSON；本月 3 次额度已用完 → RESOURCE_EXHAUSTED，reason="AVATAR_QUOTA_EXHAUSTED"，
+	//    metadata 里放当前 AvatarQuota 的 JSON（remaining 为 0）。
+	// 6. 同一 (user_id, request_id) 已提交过不同内容 → ALREADY_EXISTS。
+	// 7. 存储写失败 → INTERNAL；存储暂时不可用 → UNAVAILABLE。
+	//
+	// 业务例子：用户在 renice-infra 设置页选了一张 1.2 MB 的 WebP 动图，renice-infra 后端先发 header
+	// （client_id="renice-infra"、user_id=10001、request_id="a1b2c3d4"），再按 64 KiB 发 20 块 chunk，
+	// 拿到 changed=true 和新版本号 8，本月额度从 3 变成 2。
+	UploadUserAvatar(grpc.ClientStreamingServer[UploadUserAvatarRequest, UploadUserAvatarResponse]) error
 	mustEmbedUnimplementedSSOServiceServer()
 }
 
@@ -314,6 +451,12 @@ func (UnimplementedSSOServiceServer) GetUserPreferences(context.Context, *GetUse
 }
 func (UnimplementedSSOServiceServer) UpdateUserPreferences(context.Context, *UpdateUserPreferencesRequest) (*UpdateUserPreferencesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdateUserPreferences not implemented")
+}
+func (UnimplementedSSOServiceServer) GetUserAvatar(context.Context, *GetUserAvatarRequest) (*GetUserAvatarResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetUserAvatar not implemented")
+}
+func (UnimplementedSSOServiceServer) UploadUserAvatar(grpc.ClientStreamingServer[UploadUserAvatarRequest, UploadUserAvatarResponse]) error {
+	return status.Error(codes.Unimplemented, "method UploadUserAvatar not implemented")
 }
 func (UnimplementedSSOServiceServer) mustEmbedUnimplementedSSOServiceServer() {}
 func (UnimplementedSSOServiceServer) testEmbeddedByValue()                    {}
@@ -444,6 +587,31 @@ func _SSOService_UpdateUserPreferences_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SSOService_GetUserAvatar_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetUserAvatarRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SSOServiceServer).GetUserAvatar(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SSOService_GetUserAvatar_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SSOServiceServer).GetUserAvatar(ctx, req.(*GetUserAvatarRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SSOService_UploadUserAvatar_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(SSOServiceServer).UploadUserAvatar(&grpc.GenericServerStream[UploadUserAvatarRequest, UploadUserAvatarResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type SSOService_UploadUserAvatarServer = grpc.ClientStreamingServer[UploadUserAvatarRequest, UploadUserAvatarResponse]
+
 // SSOService_ServiceDesc is the grpc.ServiceDesc for SSOService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -475,7 +643,17 @@ var SSOService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "UpdateUserPreferences",
 			Handler:    _SSOService_UpdateUserPreferences_Handler,
 		},
+		{
+			MethodName: "GetUserAvatar",
+			Handler:    _SSOService_GetUserAvatar_Handler,
+		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "UploadUserAvatar",
+			Handler:       _SSOService_UploadUserAvatar_Handler,
+			ClientStreams: true,
+		},
+	},
 	Metadata: "renice/sso/v1/sso.proto",
 }
